@@ -19,7 +19,7 @@ import logging
 from torch import nn
 
 from lerobot.common.datasets.lerobot_dataset import LeRobotDatasetMetadata
-from lerobot.common.datasets.utils import dataset_to_policy_features
+from lerobot.common.datasets.utils import dataset_to_policy_features, libero_to_policy_features
 from lerobot.common.envs.configs import EnvConfig
 from lerobot.common.envs.utils import env_to_policy_features
 from lerobot.common.policies.act.configuration_act import ACTConfig
@@ -77,6 +77,7 @@ def make_policy(
     cfg: PreTrainedConfig,
     ds_meta: LeRobotDatasetMetadata | None = None,
     env_cfg: EnvConfig | None = None,
+    libero_dataset: bool = False,
 ) -> PreTrainedPolicy:
     """Make an instance of a policy class.
 
@@ -118,7 +119,10 @@ def make_policy(
 
     kwargs = {}
     if ds_meta is not None:
-        features = dataset_to_policy_features(ds_meta.features)
+        if libero_dataset:
+            features = libero_to_policy_features(ds_meta.features)
+        else:
+            features = dataset_to_policy_features(ds_meta.features)
         kwargs["dataset_stats"] = ds_meta.stats
     else:
         if not cfg.pretrained_path:

@@ -57,6 +57,17 @@ distant$ python lerobot/scripts/visualize_dataset.py \
     --ws-port 9087
 
 local$ rerun ws://localhost:9087
+
+
+
+
+python lerobot/scripts/visualize_dataset.py \
+    --repo-id xyg/v-0.25-0.25-c-0.25-0.25 \
+    --root /mnt/nfs/CMG/xiejunlin/datasets/Robotics/libero-xyg/libero_spatial_no_noops_lerobot_island/xyg/v-0.25-0.25-c-0.25-0.25 \
+    --episode-index 0 \
+    --mode distant \
+    --ws-port 9087
+
 ```
 
 """

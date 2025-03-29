@@ -171,3 +171,7 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+
+# xyg added
+xyg_save_dir/

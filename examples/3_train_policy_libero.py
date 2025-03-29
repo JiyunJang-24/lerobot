@@ -23,7 +23,7 @@ from pathlib import Path
 import torch
 
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
-from lerobot.common.datasets.utils import dataset_to_policy_features
+from lerobot.common.datasets.utils import libero_to_policy_features, dataset_to_policy_features
 from lerobot.common.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 from lerobot.configs.types import FeatureType
@@ -31,7 +31,7 @@ from lerobot.configs.types import FeatureType
 
 def main():
     # Create a directory to store the training checkpoint.
-    output_directory = Path("outputs/train/example_pusht_diffusion")
+    output_directory = Path("outputs/train/example_libero_diffusion")
     output_directory.mkdir(parents=True, exist_ok=True)
 
     # # Select your device
@@ -39,7 +39,7 @@ def main():
 
     # Number of offline training steps (we'll only do offline training for this example.)
     # Adjust as you prefer. 5000 steps are needed to get something worth evaluating.
-    training_steps = 500
+    training_steps = 50
     log_freq = 1
 
     # When starting from scratch (i.e. not from a pretrained policy), we need to specify 2 things before
@@ -47,8 +47,12 @@ def main():
     #   - input/output shapes: to properly size the policy
     #   - dataset stats: for normalization and denormalization of input/outputs
     import ipdb; ipdb.set_trace()
-    dataset_metadata = LeRobotDatasetMetadata("lerobot/pusht")
-    features = dataset_to_policy_features(dataset_metadata.features)    # 选取部分 features
+    dataset_metadata = LeRobotDatasetMetadata(
+        repo_id="xyg/v-0.25-0.25-c-0.25-0.25",
+        root="/mnt/hdd3/xingyouguang/datasets/robotics/libero/libero_spatial_no_noops_lerobot_island2/xyg/v-0.25-0.25-c-0.25-0.25",
+    )
+    # features = dataset_to_policy_features(dataset_metadata.features)    # 选取部分 features
+    features = libero_to_policy_features(dataset_metadata.features)    # 选取部分 features
     output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
     input_features = {key: ft for key, ft in features.items() if key not in output_features}
 
@@ -82,7 +86,11 @@ def main():
     }
 
     # We can then instantiate the dataset with these delta_timestamps configuration.
-    dataset = LeRobotDataset("lerobot/pusht", delta_timestamps=delta_timestamps)
+    dataset = LeRobotDataset(
+        "xyg/v-0.25-0.25-c-0.25-0.25",
+        root="/mnt/hdd3/xingyouguang/datasets/robotics/libero/libero_spatial_no_noops_lerobot_island2/xyg/v-0.25-0.25-c-0.25-0.25",
+        delta_timestamps=delta_timestamps,
+    )
 
     # Then we create our optimizer and dataloader for offline training.
     optimizer = torch.optim.Adam(policy.parameters(), lr=1e-4)

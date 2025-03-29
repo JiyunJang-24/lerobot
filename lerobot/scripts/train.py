@@ -24,7 +24,7 @@ from termcolor import colored
 from torch.amp import GradScaler
 from torch.optim import Optimizer
 
-from lerobot.common.datasets.factory import make_dataset
+from lerobot.common.datasets.factory import make_dataset, xyg_make_dataset
 from lerobot.common.datasets.sampler import EpisodeAwareSampler
 from lerobot.common.datasets.utils import cycle
 from lerobot.common.envs.factory import make_env
@@ -107,6 +107,11 @@ def update_policy(
 
 @parser.wrap()
 def train(cfg: TrainPipelineConfig):
+    # xyg added for multi-dataset support 
+    if cfg.dataset.repo_id2 is not None:
+        cfg.dataset.repo_ids = [cfg.dataset.repo_id, cfg.dataset.repo_id2]
+    
+    import ipdb; ipdb.set_trace()
     cfg.validate()
     logging.info(pformat(cfg.to_dict()))
 
@@ -125,8 +130,8 @@ def train(cfg: TrainPipelineConfig):
     torch.backends.cuda.matmul.allow_tf32 = True
 
     logging.info("Creating dataset")
-    dataset = make_dataset(cfg)
-
+    dataset = xyg_make_dataset(cfg)
+    
     # Create environment used for evaluating checkpoints during training on simulation data.
     # On real-world data, no need to create an environment as evaluations are done outside train.py,
     # using the eval.py instead, with gym_dora environment and dora-rs.
@@ -139,6 +144,7 @@ def train(cfg: TrainPipelineConfig):
     policy = make_policy(
         cfg=cfg.policy,
         ds_meta=dataset.meta,
+        libero_dataset=True,
     )
 
     logging.info("Creating optimizer and scheduler")

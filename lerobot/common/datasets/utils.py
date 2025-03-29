@@ -428,6 +428,83 @@ def dataset_to_policy_features(features: dict[str, dict]) -> dict[str, PolicyFea
     return policy_features
 
 
+def libero_to_policy_features(features: dict[str, dict]) -> dict[str, PolicyFeature]:
+    # TODO(aliberts): Implement "type" in dataset features and simplify this
+    policy_features = {}
+    for key, ft in features.items():
+        shape = ft["shape"]
+        if key == "observation.wrist_image":    # 不需要wrist image
+            continue
+        
+        if key == "observation.environment_state":  # 不给他看环境的state
+            continue
+        
+        if ft["dtype"] in ["image", "video"]:
+            type = FeatureType.VISUAL
+            if len(shape) != 3:
+                raise ValueError(f"Number of dimensions of {key} != 3 (shape={shape})")
+
+            names = ft["names"]
+            # Backward compatibility for "channel" which is an error introduced in LeRobotDataset v2.0 for ported datasets.
+            if names[2] in ["channel", "channels"]:  # (h, w, c) -> (c, h, w)
+                shape = (shape[2], shape[0], shape[1])
+        elif key == "observation.environment_state":
+            type = FeatureType.ENV
+        elif key.startswith("observation"):
+            type = FeatureType.STATE
+        elif key == "action":
+            type = FeatureType.ACTION
+        else:
+            continue
+
+        policy_features[key] = PolicyFeature(
+            type=type,
+            shape=shape,
+        )
+
+    return policy_features
+
+
+def libero_to_policy_features1(features: dict[str, dict]) -> dict[str, PolicyFeature]:
+    # TODO(aliberts): Implement "type" in dataset features and simplify this
+    policy_features = {}
+    import ipdb; ipdb.set_trace()
+    for key, ft in features.items():
+        shape = ft["shape"]
+        if ft["dtype"] in ["image", "video"]:
+            # key = image or wrist_image
+            if key == "image":
+                key = "observation.image"
+                type = FeatureType.VISUAL
+                if len(shape) != 3:
+                    raise ValueError(f"Number of dimensions of {key} != 3 (shape={shape})")
+
+                names = ft["names"]
+                # Backward compatibility for "channel" which is an error introduced in LeRobotDataset v2.0 for ported datasets.
+                if names[2] in ["channel", "channels"]:  # (h, w, c) -> (c, h, w)
+                    shape = (shape[2], shape[0], shape[1])
+            else:   # wrist_image
+                continue
+        elif key == "observation.environment_state":    # not used
+            type = FeatureType.ENV
+        elif key.startswith("observation"): # not used, we do not have observation.state
+            type = FeatureType.STATE
+        # elif key == "action":
+        elif key == "actions":   # xyg added
+            key = "action"
+            type = FeatureType.ACTION
+        else:
+            continue
+
+        # we only need image and actions
+        policy_features[key] = PolicyFeature(
+            type=type,
+            shape=shape,
+        )
+
+    return policy_features
+
+
 def create_empty_dataset_info(
     codebase_version: str,
     fps: int,

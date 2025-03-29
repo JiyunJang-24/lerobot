@@ -116,3 +116,60 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                 dataset.meta.stats[key][stats_type] = torch.tensor(stats, dtype=torch.float32)
 
     return dataset
+
+
+def xyg_make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDataset:
+    """Handles the logic of setting up delta timestamps and image transforms before creating a dataset.
+
+    Args:
+        cfg (TrainPipelineConfig): A TrainPipelineConfig config which contains a DatasetConfig and a PreTrainedConfig.
+
+    Raises:
+        NotImplementedError: The MultiLeRobotDataset is currently deactivated.
+
+    Returns:
+        LeRobotDataset | MultiLeRobotDataset
+    """
+    image_transforms = (
+        ImageTransforms(cfg.dataset.image_transforms) if cfg.dataset.image_transforms.enable else None
+    )
+
+    if cfg.dataset.repo_ids is None:
+        ds_meta = LeRobotDatasetMetadata(
+            cfg.dataset.repo_id, root=cfg.dataset.root, revision=cfg.dataset.revision
+        )
+        delta_timestamps = resolve_delta_timestamps(cfg.policy, ds_meta)
+        dataset = LeRobotDataset(
+            cfg.dataset.repo_id,
+            root=cfg.dataset.root,
+            episodes=cfg.dataset.episodes,
+            delta_timestamps=delta_timestamps,
+            image_transforms=image_transforms,
+            revision=cfg.dataset.revision,
+            video_backend=cfg.dataset.video_backend,
+        )
+    else:
+        ds_meta = LeRobotDatasetMetadata(
+            cfg.dataset.repo_id, root=f"{cfg.dataset.root}/{cfg.dataset.repo_id}", revision=cfg.dataset.revision
+        )
+        delta_timestamps = resolve_delta_timestamps(cfg.policy, ds_meta) # 沿用同一个 ds_meta，格式都一样的，形成delta_timestamps
+        dataset = MultiLeRobotDataset(
+            cfg.dataset.repo_ids,
+            root=cfg.dataset.root,
+            delta_timestamps=delta_timestamps,
+            image_transforms=image_transforms,
+            video_backend=cfg.dataset.video_backend,
+        )
+        dataset.meta = ds_meta
+        logging.info(
+            "Multiple datasets were provided. Applied the following index mapping to the provided datasets: "
+            f"{pformat(dataset.repo_id_to_index, indent=2)}"
+        )
+
+    import ipdb; ipdb.set_trace()
+    if cfg.dataset.use_imagenet_stats:
+        for key in dataset.meta.camera_keys:
+            for stats_type, stats in IMAGENET_STATS.items():
+                dataset.meta.stats[key][stats_type] = torch.tensor(stats, dtype=torch.float32)
+
+    return dataset

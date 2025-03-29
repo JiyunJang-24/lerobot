@@ -55,15 +55,16 @@ env = gym.make(
     max_episode_steps=300,
 )
 
+import ipdb; ipdb.set_trace()
 # We can verify that the shapes of the features expected by the policy match the ones from the observations
 # produced by the environment
-print(policy.config.input_features)
-print(env.observation_space)
+print(policy.config.input_features) # {'observation.image': PolicyFeature(type=<FeatureType.VISUAL: 'VISUAL'>, shape=(3, 96, 96)), 'observation.state': PolicyFeature(type=<FeatureType.STATE: 'STATE'>, shape=(2,))}
+print(env.observation_space)    # Dict('agent_pos': Box(0.0, 512.0, (2,), float64), 'pixels': Box(0, 255, (96, 96, 3), uint8))
 
 # Similarly, we can check that the actions produced by the policy will match the actions expected by the
 # environment
-print(policy.config.output_features)
-print(env.action_space)
+print(policy.config.output_features)    # {'action': PolicyFeature(type=<FeatureType.ACTION: 'ACTION'>, shape=(2,))}
+print(env.action_space)                 # Box(0.0, 512.0, (2,), float32)
 
 # Reset the policy and environments to prepare for rollout
 policy.reset()
@@ -88,7 +89,7 @@ while not done:
     # to channel last in [0,1]
     state = state.to(torch.float32)
     image = image.to(torch.float32) / 255
-    image = image.permute(2, 0, 1)
+    image = image.permute(2, 0, 1)  # C, H, W -> H, W, C
 
     # Send data tensors from CPU to GPU
     state = state.to(device, non_blocking=True)

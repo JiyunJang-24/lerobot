@@ -33,28 +33,13 @@ import torch
 from huggingface_hub import HfApi
 
 import lerobot
-from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata, MultiLeRobotDataset
 
-# We ported a number of existing datasets ourselves, use this to see the list:
-import ipdb; ipdb.set_trace()
-print("List of available datasets:")
-pprint(lerobot.available_datasets)
 
-# You can also browse through the datasets created/ported by the community on the hub using the hub api:
-need_hf_api = False
-if need_hf_api:
-    # hub_api = HfApi()
-    hub_api = HfApi(endpoint="https://hf-mirror.com")
-    repo_ids = [info.id for info in hub_api.list_datasets(task_categories="robotics", tags=["LeRobot"])]
-    pprint(repo_ids)
-
-# Or simply explore them in your web browser directly at:
-# https://huggingface.co/datasets?other=LeRobot
-
-# Let's take this one for this example
-repo_id = "lerobot/aloha_mobile_cabinet"
-# We can have a look and fetch its metadata to know more about it:
-ds_meta = LeRobotDatasetMetadata(repo_id)
+repo_ids = ["xyg/v-0.25-0.25-c-0.25-0.25", "xyg/v-0.50-0.50-c-0.50-0.50", "xyg/v-0.75-0.75-c-0.75-0.75"]
+repo_id = repo_ids[0]
+root = r"/mnt/hdd3/xingyouguang/datasets/robotics/libero/libero_spatial_no_noops_lerobot_island_1"
+ds_meta = LeRobotDatasetMetadata(repo_id, root=f"{root}/{repo_id}")
 
 # By instantiating just this class, you can quickly access useful information about the content and the
 # structure of the dataset without downloading the actual data yet (only metadata files — which are
@@ -75,16 +60,17 @@ print(ds_meta)
 
 # You can then load the actual dataset from the hub.
 # Either ***load any subset of episodes:***
-dataset = LeRobotDataset(repo_id, episodes=[0, 10, 11, 23])
+dataset = MultiLeRobotDataset(repo_ids=repo_ids, root=root)
+# dataset = LeRobotDataset(repo_id, episodes=[0, 10, 11, 23])
 import ipdb; ipdb.set_trace()
 
 # And see how many frames you have:
-print(f"Selected episodes: {dataset.episodes}")
+# print(f"Selected episodes: {dataset.episodes}")
 print(f"Number of episodes selected: {dataset.num_episodes}")
 print(f"Number of frames selected: {dataset.num_frames}")
 
 # Or simply ***load the entire dataset:***
-dataset = LeRobotDataset(repo_id)
+dataset = LeRobotDataset(repo_id, root=f"{root}/{repo_id}")
 print(f"Number of episodes selected: {dataset.num_episodes}")
 print(f"Number of frames selected: {dataset.num_frames}")
 
@@ -133,8 +119,42 @@ delta_timestamps = {
 # Note that in any case, these delta_timestamps values need to be multiples of (1/fps) so that added to any
 # timestamp, you still get a valid timestamp.
 
-dataset = LeRobotDataset(repo_id, delta_timestamps=delta_timestamps)
+dataset = LeRobotDataset(repo_id, root=f"{root}/{repo_id}", delta_timestamps=delta_timestamps)
 print(f"\n{dataset[0][camera_key].shape=}")  # (4, c, h, w)
+print(f"{dataset[0]['observation.state'].shape=}")  # (6, c)
+print(f"{dataset[0]['action'].shape=}\n")  # (64, c)
+
+# Finally, our datasets are fully compatible with PyTorch dataloaders and samplers because they are just
+# PyTorch datasets.
+dataloader = torch.utils.data.DataLoader(
+    dataset,
+    num_workers=0,
+    batch_size=32,
+    shuffle=True,
+)
+
+for batch in dataloader:
+    print(f"{batch[camera_key].shape=}")  # (32, 4, c, h, w)
+    print(f"{batch['observation.state'].shape=}")  # (32, 5, c)
+    print(f"{batch['action'].shape=}")  # (32, 64, c)
+    break
+
+
+import ipdb; ipdb.set_trace()
+
+delta_timestamps = {
+    # loads 4 images: 1 second before current frame, 500 ms before, 200 ms before, and current frame
+    camera_key: [-1, -0.5, -0.20, 0],
+    # loads 8 state vectors: 1.5 seconds before, 1 second before, ... 200 ms, 100 ms, and current frame
+    "observation.state": [-1.5, -1, -0.5, -0.20, -0.10, 0],
+    "observation.image": [-1.5, -1, -0.5, -0.20, -0.10, 0],
+    # loads 64 action vectors: current frame, 1 frame in the future, 2 frames, ... 63 frames in the future
+    "action": [t / dataset.fps for t in range(64)],
+}
+
+dataset = MultiLeRobotDataset(repo_ids=repo_ids, root=root, delta_timestamps=delta_timestamps)
+print(f"\n{dataset[0][camera_key].shape=}")  # (4, c, h, w)
+print(f"{dataset[0]['observation.image'].shape=}")  # (6, c)
 print(f"{dataset[0]['observation.state'].shape=}")  # (6, c)
 print(f"{dataset[0]['action'].shape=}\n")  # (64, c)
 
