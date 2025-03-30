@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import copy
 import logging
 import time
 from contextlib import nullcontext
@@ -24,7 +25,7 @@ from termcolor import colored
 from torch.amp import GradScaler
 from torch.optim import Optimizer
 
-from lerobot.common.datasets.factory import make_dataset, xyg_make_dataset
+from lerobot.common.datasets.factory import make_dataset
 from lerobot.common.datasets.sampler import EpisodeAwareSampler
 from lerobot.common.datasets.utils import cycle
 from lerobot.common.envs.factory import make_env
@@ -51,6 +52,8 @@ from lerobot.common.utils.wandb_utils import WandBLogger
 from lerobot.configs import parser
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.scripts.eval import eval_policy
+
+from lerobot.common.datasets.lerobot_dataset import MultiLeRobotDataset, LeRobotDataset
 
 
 def update_policy(
@@ -106,12 +109,7 @@ def update_policy(
 
 
 @parser.wrap()
-def train(cfg: TrainPipelineConfig):
-    # xyg added for multi-dataset support 
-    if cfg.dataset.repo_id2 is not None:
-        cfg.dataset.repo_ids = [cfg.dataset.repo_id, cfg.dataset.repo_id2]
-    
-    import ipdb; ipdb.set_trace()
+def train(cfg: TrainPipelineConfig):    
     cfg.validate()
     logging.info(pformat(cfg.to_dict()))
 
@@ -130,7 +128,7 @@ def train(cfg: TrainPipelineConfig):
     torch.backends.cuda.matmul.allow_tf32 = True
 
     logging.info("Creating dataset")
-    dataset = xyg_make_dataset(cfg)
+    dataset = make_dataset(cfg)
     
     # Create environment used for evaluating checkpoints during training on simulation data.
     # On real-world data, no need to create an environment as evaluations are done outside train.py,
@@ -141,9 +139,13 @@ def train(cfg: TrainPipelineConfig):
         eval_env = make_env(cfg.env, n_envs=cfg.eval.batch_size)
 
     logging.info("Creating policy")
+    if isinstance(dataset, MultiLeRobotDataset):
+        ds_meta = dataset._datasets[0].meta
+    else:
+        ds_meta = dataset.meta
     policy = make_policy(
         cfg=cfg.policy,
-        ds_meta=dataset.meta,
+        ds_meta=ds_meta,
         libero_dataset=True,
     )
 
@@ -171,8 +173,24 @@ def train(cfg: TrainPipelineConfig):
     # create dataloader for offline training
     if hasattr(cfg.policy, "drop_n_last_frames"):
         shuffle = False
+        if isinstance(dataset, MultiLeRobotDataset):
+            episode_data_index_list = []
+            for ds in dataset._datasets:
+                episode_data_index_list.append(copy.deepcopy(ds.episode_data_index))    # 一定要 deepcopy, .copy()都不行
+            increase_num = 0
+            for i in range(0, len(episode_data_index_list)):
+                episode_data_index_list[i]["from"] += increase_num
+                episode_data_index_list[i]["to"] += increase_num
+                increase_num += episode_data_index_list[i]["to"][-1]
+            episode_data_index = {
+                "from": torch.cat([ds["from"] for ds in episode_data_index_list]),
+                "to": torch.cat([ds["to"] for ds in episode_data_index_list]),
+            }
+        else:
+            episode_data_index = dataset.episode_data_index
+        
         sampler = EpisodeAwareSampler(
-            dataset.episode_data_index,
+            episode_data_index,
             drop_n_last_frames=cfg.policy.drop_n_last_frames,
             shuffle=True,
         )
