@@ -158,6 +158,9 @@ class DiffusionConfig(PreTrainedConfig):
     optimizer_weight_decay: float = 1e-6
     scheduler_name: str = "cosine"
     scheduler_warmup_steps: int = 500
+    
+    # xyg added
+    use_robot_state: bool = True
 
     def __post_init__(self):
         super().__post_init__()

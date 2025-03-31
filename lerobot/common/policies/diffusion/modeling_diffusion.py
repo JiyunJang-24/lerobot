@@ -176,7 +176,10 @@ class DiffusionModel(nn.Module):
         self.config = config
 
         # Build observation encoders (depending on which observations are provided).
-        global_cond_dim = self.config.robot_state_feature.shape[0]
+        if self.config.use_robot_state:
+            global_cond_dim = self.config.robot_state_feature.shape[0]
+        else:
+            global_cond_dim = 0
         if self.config.image_features:
             num_images = len(self.config.image_features)
             if self.config.use_separate_rgb_encoder_per_camera:
@@ -239,7 +242,9 @@ class DiffusionModel(nn.Module):
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode image features and concatenate them all together along with the state vector."""
         batch_size, n_obs_steps = batch[OBS_ROBOT].shape[:2]
-        global_cond_feats = [batch[OBS_ROBOT]]
+        global_cond_feats = []
+        if self.config.use_robot_state:
+            global_cond_feats.append(batch[OBS_ROBOT])
         # Extract image features.
         if self.config.image_features:
             if self.config.use_separate_rgb_encoder_per_camera:
