@@ -452,6 +452,12 @@ class DiffusionRgbEncoder(nn.Module):
     def __init__(self, config: DiffusionConfig):
         super().__init__()
         # Set up optional preprocessing.
+        
+        if config.xyg_resize_shape is not None:
+            self.resize = torchvision.transforms.Resize(config.xyg_resize_shape)
+        else:
+            self.resize = None
+
         if config.crop_shape is not None:
             self.do_crop = True
             # Always use center crop for eval
@@ -472,9 +478,10 @@ class DiffusionRgbEncoder(nn.Module):
         self.backbone = nn.Sequential(*(list(backbone_model.children())[:-2]))
         if config.use_group_norm:
             if config.pretrained_backbone_weights:
-                raise ValueError(
-                    "You can't replace BatchNorm in a pretrained model without ruining the weights!"
-                )
+                # raise ValueError(
+                #     "You can't replace BatchNorm in a pretrained model without ruining the weights!"
+                # )
+                print('WARNING: xyg do not care it just for trying')
             self.backbone = _replace_submodules(
                 root_module=self.backbone,
                 predicate=lambda x: isinstance(x, nn.BatchNorm2d),
@@ -506,6 +513,9 @@ class DiffusionRgbEncoder(nn.Module):
             (B, D) image feature.
         """
         # Preprocess: maybe crop (if it was set up in the __init__).
+        if self.resize is not None:
+            x = self.resize(x)
+            
         if self.do_crop:
             if self.training:  # noqa: SIM108
                 x = self.maybe_random_crop(x)

@@ -123,6 +123,7 @@ class DiffusionConfig(PreTrainedConfig):
     # Architecture / modeling.
     # Vision backbone.
     vision_backbone: str = "resnet18"
+    xyg_resize_shape: tuple[int, int] | None = (84, 84)
     crop_shape: tuple[int, int] | None = (84, 84)
     crop_is_random: bool = True
     pretrained_backbone_weights: str | None = None

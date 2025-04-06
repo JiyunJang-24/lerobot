@@ -24,6 +24,7 @@ import torch
 from termcolor import colored
 from torch.amp import GradScaler
 from torch.optim import Optimizer
+from PIL import Image
 
 from lerobot.common.datasets.factory import make_dataset
 from lerobot.common.datasets.sampler import EpisodeAwareSampler
@@ -226,7 +227,10 @@ def train(cfg: TrainPipelineConfig):
     logging.info("Start offline training on a fixed dataset")
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
-        batch = next(dl_iter)
+        batch = next(dl_iter)       # batch['observation.image'] 是 bz x history x 3 x w x h
+        # i = 0
+        # Image.fromarray((batch["observation.image"][i, 0].cpu() * 255).clamp(0, 255).to(torch.uint8).permute(1, 2, 0).numpy()).save(f'tmp_dir/train_vis_data{i}.png')
+
         train_tracker.dataloading_s = time.perf_counter() - start_time
 
         for key in batch:

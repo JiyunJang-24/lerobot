@@ -86,18 +86,33 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
         datasets = cfg.dataset.repo_id.strip('[]').split(',')
         datasets = [x.strip() for x in datasets]
         delta_timestamps = {}
+        meta_data_dict = {}
         for ds in datasets:
             ds_meta = LeRobotDatasetMetadata(ds, root=f"{cfg.dataset.root}/{ds}", revision=cfg.dataset.revision)
             d_ts = resolve_delta_timestamps(cfg.policy, ds_meta)
             delta_timestamps[ds] = d_ts
+            meta_data_dict[ds] = ds_meta
+        
+        if cfg.dataset.split_episodes:
+            assert len(datasets) == 2, "Only two datasets are supported for split_episodes"
+            episodes_dict = {}
+            assert meta_data_dict[datasets[0]].total_episodes == meta_data_dict[datasets[1]].total_episodes, "Total episodes must be the same for both datasets"
+            assert meta_data_dict[datasets[0]].total_frames == meta_data_dict[datasets[1]].total_frames, "Total episodes must be even for split_episodes"
+            episodes_dict[datasets[0]] = list(range(0, meta_data_dict[datasets[0]].total_episodes // 2))
+            episodes_dict[datasets[1]] = list(range(meta_data_dict[datasets[0]].total_episodes // 2, meta_data_dict[datasets[0]].total_episodes))
+        else:
+            episodes_dict = {}
+
         dataset = MultiLeRobotDataset(
             datasets,
             root=cfg.dataset.root,
+            episodes=episodes_dict,
             # TODO(aliberts): add proper support for multi dataset
             delta_timestamps=delta_timestamps,
             image_transforms=image_transforms,
             video_backend=cfg.dataset.video_backend,
         )
+        
         logging.info(
             "Multiple datasets were provided. Applied the following index mapping to the provided datasets: "
             f"{pformat(dataset.repo_id_to_index , indent=2)}"
