@@ -176,3 +176,4 @@ cython_debug/
 # xyg added
 xyg_save_dir/
 0-*.png
+dataset_description/

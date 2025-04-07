@@ -831,7 +831,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
         self.episode_buffer["size"] += 1
 
-    def save_episode(self, episode_data: dict | None = None) -> None:
+    def save_episode(self, episode_data: dict | None = None, keep_images: bool | None = False) -> None:
         """
         This will save to disk the current episode in self.episode_buffer.
 
@@ -899,9 +899,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
         assert len(parquet_files) == self.num_episodes
 
         # delete images
-        img_dir = self.root / "images"
-        if img_dir.is_dir():
-            shutil.rmtree(self.root / "images")
+        if not keep_images:
+            img_dir = self.root / "images"
+            if img_dir.is_dir():
+                shutil.rmtree(self.root / "images")
 
         if not episode_data:  # Reset the buffer
             self.episode_buffer = self.create_episode_buffer()
