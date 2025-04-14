@@ -135,9 +135,19 @@ def generate_features_from_raw(builder: tfds.core.DatasetBuilder, use_videos: bo
     return {**features, **DEFAULT_FEATURES}
 
 
-def save_as_lerobot_dataset(lerobot_dataset: LeRobotDataset, raw_dataset: tf.data.Dataset, **kwargs):
+def save_as_lerobot_dataset(lerobot_dataset: LeRobotDataset, raw_dataset: tf.data.Dataset, condition_check_dict = {}, **kwargs):
     for episode in raw_dataset.as_numpy_iterator():
         traj = episode["steps"]
+        
+        if 'IN' in condition_check_dict:
+            continue_flag = False
+            for check_in_key in condition_check_dict['IN']:
+                if check_in_key not in traj['task'][0].decode():
+                    continue_flag = True
+                    break
+            if continue_flag:
+                continue
+        
         for i in range(traj["action"].shape[0]):
             image_dict = {
                 f"observation.images.{key}": value[i]
@@ -166,6 +176,7 @@ def create_lerobot_dataset(
     image_writer_process: int = 5,
     image_writer_threads: int = 10,
     keep_images: bool = True,
+    filters: bool = False,
 ):
     last_part = raw_dir.name
     if re.match(r"^\d+\.\d+\.\d+$", last_part):
@@ -216,7 +227,15 @@ def create_lerobot_dataset(
         image_writer_processes=image_writer_process,
     )
 
-    save_as_lerobot_dataset(lerobot_dataset, raw_dataset, keep_images=keep_images)
+    condition_check_dict = {}
+    if filters:
+        if 'fractal20220817' in str(raw_dir) or 'rt1' in str(raw_dir):
+            condition_check_dict['IN'] = ['pick coke can']
+        elif 'bridge' in str(raw_dir):
+            condition_check_dict['IN'] = ['carrot']
+        
+        
+    save_as_lerobot_dataset(lerobot_dataset, raw_dataset, keep_images=keep_images, condition_check_dict=condition_check_dict)
 
     if push_to_hub:
         assert repo_id is not None
@@ -293,7 +312,16 @@ def main():
         help="Whether to keep the cached images.",
     )
 
+    parser.add_argument(
+        "--filters",
+        type=str,
+        default='False',
+        help="Filters to apply to the dataset.",
+    )
+    
     args = parser.parse_args()
+    args.filters = args.filters == 'True'
+    
     create_lerobot_dataset(**vars(args))
 
 
