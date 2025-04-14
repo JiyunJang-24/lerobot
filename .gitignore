@@ -178,3 +178,4 @@ xyg_save_dir/
 0-*.png
 dataset_description/
 save_images/
+tests/*.safetensors
