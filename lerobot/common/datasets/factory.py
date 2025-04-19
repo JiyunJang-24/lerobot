@@ -83,7 +83,11 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
     )
 
     if cfg.dataset.repo_id.startswith('['):
-        datasets = cfg.dataset.repo_id.strip('[]').split(',')
+        if ';' in cfg.dataset.repo_id:
+            # [xyg_20_10_15.0_65.0/v-0.400-0.400_0,1,3,5,8;xyg_20_10_15.0_65.0/v-0.600-0.600_2,4,6,7,9]
+            datasets = cfg.dataset.repo_id.strip('[]').split(';')
+        else:
+            datasets = cfg.dataset.repo_id.strip('[]').split(',')
         datasets = [x.strip() for x in datasets]
         delta_timestamps = {}
         meta_data_dict = {}
