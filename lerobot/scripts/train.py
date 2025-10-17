@@ -182,14 +182,13 @@ def train(cfg: TrainPipelineConfig):
             for i in range(0, len(episode_data_index_list)):
                 episode_data_index_list[i]["from"] += increase_num
                 episode_data_index_list[i]["to"] += increase_num
-                increase_num += episode_data_index_list[i]["to"][-1]
+                increase_num = episode_data_index_list[i]["to"][-1]
             episode_data_index = {
                 "from": torch.cat([ds["from"] for ds in episode_data_index_list]),
                 "to": torch.cat([ds["to"] for ds in episode_data_index_list]),
             }
         else:
             episode_data_index = dataset.episode_data_index
-        
         sampler = EpisodeAwareSampler(
             episode_data_index,
             drop_n_last_frames=cfg.policy.drop_n_last_frames,

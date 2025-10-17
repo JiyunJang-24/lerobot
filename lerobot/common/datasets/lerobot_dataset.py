@@ -1182,7 +1182,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         if idx >= len(self):
-            raise IndexError(f"Index {idx} out of bounds.")
+            raise IndexError(f"Index {idx} out of bounds. Dataset length is {len(self)}.")
         # Determine which dataset to get an item from based on the index.
         start_idx = 0
         dataset_idx = 0
