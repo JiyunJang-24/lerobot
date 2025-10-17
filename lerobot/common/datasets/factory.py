@@ -113,6 +113,7 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
             # TODO(aliberts): add proper support for multi dataset
             use_action_avg=cfg.use_action_avg,
             window_size=cfg.window_size,
+            use_dynamic_feature=cfg.policy.use_dynamic_feature,
             delta_timestamps=delta_timestamps,
             image_transforms=image_transforms,
             video_backend=cfg.dataset.video_backend,

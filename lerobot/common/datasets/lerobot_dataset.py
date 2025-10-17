@@ -1051,6 +1051,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         use_action_avg: bool = False,
         window_size: int | None = None,
         video_backend: str | None = None,
+        use_dynamic_feature: bool = False,
     ):
         super().__init__()
         self.repo_ids = repo_ids
@@ -1100,6 +1101,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
 
         self.use_action_avg = use_action_avg
         self.window_size = window_size
+        self.use_dynamic_feature = use_dynamic_feature
 
     @property
     def repo_id_to_index(self):
@@ -1201,30 +1203,31 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         
         item = self._datasets[dataset_idx][idx - start_idx]
 
-        indices = random.sample(range(self._datasets[dataset_idx].num_frames-self.window_size), 3) # ensure we have enough frames for +5
-        repo_name = self.repo_ids[dataset_idx]
-        img_delta_ts = self.delta_timestamps[repo_name]["observation.image"].index(0.0)
-        act_delta_ts = self.delta_timestamps[repo_name]["action"].index(0.0)
+        if self.use_dynamic_feature:
+            indices = random.sample(range(self._datasets[dataset_idx].num_frames-self.window_size), 3) # ensure we have enough frames for +5
+            repo_name = self.repo_ids[dataset_idx]
+            img_delta_ts = self.delta_timestamps[repo_name]["observation.image"].index(0.0)
+            act_delta_ts = self.delta_timestamps[repo_name]["action"].index(0.0)
 
-        images = []
-        actions = []
-        for i, dynamic_start_idx in enumerate(indices):
-            dynamic_next_idx = dynamic_start_idx + self.window_size
+            images = []
+            actions = []
+            for i, dynamic_start_idx in enumerate(indices):
+                dynamic_next_idx = dynamic_start_idx + self.window_size
 
-            ds = self._datasets[dataset_idx]
+                ds = self._datasets[dataset_idx]
 
-            img_seq = torch.stack([
-                ds[dynamic_start_idx]["observation.image"][img_delta_ts],
-                ds[dynamic_next_idx]["observation.image"][img_delta_ts],
-            ])
-            images.append(img_seq)
-            act_seq = ds[dynamic_start_idx]["action"][act_delta_ts : act_delta_ts + self.window_size-1]
-            
-            if self.use_action_avg:
-                act_seq = torch.mean(act_seq, dim=0)
-            actions.append(act_seq)
-        item["dynamic.image"] = torch.stack(images)
-        item["dynamic.action"] = torch.stack(actions)
+                img_seq = torch.stack([
+                    ds[dynamic_start_idx]["observation.image"][img_delta_ts],
+                    ds[dynamic_next_idx]["observation.image"][img_delta_ts],
+                ])
+                images.append(img_seq)
+                act_seq = ds[dynamic_start_idx]["action"][act_delta_ts : act_delta_ts + self.window_size-1]
+                
+                if self.use_action_avg:
+                    act_seq = torch.mean(act_seq, dim=0)
+                actions.append(act_seq)
+            item["dynamic.image"] = torch.stack(images)
+            item["dynamic.action"] = torch.stack(actions)
         item["dataset_index"] = torch.tensor(dataset_idx)
 
         for data_key in self.disabled_features:
