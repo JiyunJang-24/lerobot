@@ -249,7 +249,7 @@ class DiffusionModel(nn.Module):
             num_images = len(self.config.image_features)
             #TODO JY: Unimatch import해서 가져와야함.
             self.dynamic_encoder = load_optical_backbone(get_device_from_parameters(self))
-            global_cond_dim += self.dynamic_encoder.feature_dim * num_images * self.config.num_dynamic_features
+            global_cond_dim += self.dynamic_encoder.feature_dim * num_images * self.config.num_dynamic_feature
 
         if self.config.env_state_feature:
             global_cond_dim += self.config.env_state_feature.shape[0]
@@ -352,7 +352,7 @@ class DiffusionModel(nn.Module):
                 dynamic_features = einops.rearrange(
                     dynamic_features_list, "(n b s) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
                 )
-                #dynamic_features는 batch_size * num_dynamic_features * feature_dim
+                #dynamic_features는 batch_size * num_dynamic_feature * feature_dim
                 global_cond_feats.append(dynamic_features)
 
         if self.config.env_state_feature:
