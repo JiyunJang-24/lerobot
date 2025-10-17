@@ -173,7 +173,6 @@ def train(cfg: TrainPipelineConfig):
     logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
 
     # create dataloader for offline training
-    #TODO JY: dynamic dataset 추가해야함 
     if hasattr(cfg.policy, "drop_n_last_frames"):
         shuffle = False
         if isinstance(dataset, MultiLeRobotDataset):

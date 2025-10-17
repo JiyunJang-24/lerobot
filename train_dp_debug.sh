@@ -25,7 +25,7 @@ CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
   --policy.num_dynamic_feature=3 \
   --steps=90000 \
   --save_freq=5000 \
-  --batch_size=512 \
+  --batch_size=2 \
   --wandb.enable=false \
   --num_workers=0
 # Training checkpoints will be saved under: lerobot/outputs/train/202x-xx-xx/xx-xx-xx_diffusion
