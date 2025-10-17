@@ -96,7 +96,6 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
             d_ts = resolve_delta_timestamps(cfg.policy, ds_meta)
             delta_timestamps[ds] = d_ts
             meta_data_dict[ds] = ds_meta
-        
         if cfg.dataset.split_episodes:
             assert len(datasets) == 2, "Only two datasets are supported for split_episodes"
             episodes_dict = {}
@@ -112,13 +111,15 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
             root=cfg.dataset.root,
             episodes=episodes_dict,
             # TODO(aliberts): add proper support for multi dataset
+            use_action_avg=cfg.use_action_avg,
+            window_size=cfg.window_size,
             delta_timestamps=delta_timestamps,
             image_transforms=image_transforms,
             video_backend=cfg.dataset.video_backend,
         )
         
         logging.info(
-            "Multiple datasets were provided. Applied the following index mapping to the provided datasets: "
+        "Multiple datasets were provided. Applied the following index mapping to the provided datasets: "
             f"{pformat(dataset.repo_id_to_index , indent=2)}"
         )
     else:

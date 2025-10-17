@@ -18,7 +18,7 @@ import logging
 import shutil
 from pathlib import Path
 from typing import Callable
-
+import random
 import datasets
 import numpy as np
 import packaging.version
@@ -1048,6 +1048,8 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         delta_timestamps: dict[list[float]] | None = None,
         tolerances_s: dict | None = None,
         download_videos: bool = True,
+        use_action_avg: bool = False,
+        window_size: int | None = None,
         video_backend: str | None = None,
     ):
         super().__init__()
@@ -1069,7 +1071,6 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             )
             for repo_id in repo_ids
         ]
-
         # Disable any data keys that are not common across all of the datasets. Note: we may relax this
         # restriction in future iterations of this class. For now, this is necessary at least for being able
         # to use PyTorch's default DataLoader collate function.
@@ -1096,6 +1097,9 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         # with multiple robots of different ranges. Instead we should have one normalization
         # per robot.
         self.stats = aggregate_stats([dataset.meta.stats for dataset in self._datasets])
+
+        self.use_action_avg = use_action_avg
+        self.window_size = window_size
 
     @property
     def repo_id_to_index(self):
@@ -1194,12 +1198,38 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             break
         else:
             raise AssertionError("We expect the loop to break out as long as the index is within bounds.")
+        
         item = self._datasets[dataset_idx][idx - start_idx]
+
+        indices = random.sample(range(self._datasets[dataset_idx].num_frames-self.window_size), 3) # ensure we have enough frames for +5
+        repo_name = self.repo_ids[dataset_idx]
+        img_delta_ts = self.delta_timestamps[repo_name]["observation.image"].index(0.0)
+        act_delta_ts = self.delta_timestamps[repo_name]["action"].index(0.0)
+
+        images = []
+        actions = []
+        for i, dynamic_start_idx in enumerate(indices):
+            dynamic_next_idx = dynamic_start_idx + self.window_size
+
+            ds = self._datasets[dataset_idx]
+
+            img_seq = torch.stack([
+                ds[dynamic_start_idx]["observation.image"][img_delta_ts],
+                ds[dynamic_next_idx]["observation.image"][img_delta_ts],
+            ])
+            images.append(img_seq)
+            act_seq = ds[dynamic_start_idx]["action"][act_delta_ts : act_delta_ts + self.window_size-1]
+            
+            if self.use_action_avg:
+                act_seq = torch.mean(act_seq, dim=0)
+            actions.append(act_seq)
+        item["dynamic.image"] = torch.stack(images)
+        item["dynamic.action"] = torch.stack(actions)
         item["dataset_index"] = torch.tensor(dataset_idx)
+
         for data_key in self.disabled_features:
             if data_key in item:
                 del item[data_key]
-
         return item
 
     def __repr__(self):

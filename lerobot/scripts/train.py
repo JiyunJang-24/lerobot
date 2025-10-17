@@ -198,7 +198,7 @@ def train(cfg: TrainPipelineConfig):
     else:
         shuffle = True
         sampler = None
-
+    
     dataloader = torch.utils.data.DataLoader(
         dataset,
         num_workers=cfg.num_workers,
@@ -209,7 +209,6 @@ def train(cfg: TrainPipelineConfig):
         drop_last=False,
     )
     dl_iter = cycle(dataloader)
-
     policy.train()
 
     train_metrics = {
@@ -236,7 +235,6 @@ def train(cfg: TrainPipelineConfig):
         for key in batch:
             if isinstance(batch[key], torch.Tensor):
                 batch[key] = batch[key].to(device, non_blocking=True)
-
         train_tracker, output_dict = update_policy(
             train_tracker,
             policy,
