@@ -173,6 +173,7 @@ def train(cfg: TrainPipelineConfig):
     logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
 
     # create dataloader for offline training
+    #TODO JY: dynamic dataset 추가해야함 
     if hasattr(cfg.policy, "drop_n_last_frames"):
         shuffle = False
         if isinstance(dataset, MultiLeRobotDataset):
@@ -198,7 +199,7 @@ def train(cfg: TrainPipelineConfig):
     else:
         shuffle = True
         sampler = None
-
+    
     dataloader = torch.utils.data.DataLoader(
         dataset,
         num_workers=cfg.num_workers,
@@ -230,7 +231,6 @@ def train(cfg: TrainPipelineConfig):
         batch = next(dl_iter)       # batch['observation.image'] 是 bz x history x 3 x w x h
         # i = 0
         # Image.fromarray((batch["observation.image"][i, 0].cpu() * 255).clamp(0, 255).to(torch.uint8).permute(1, 2, 0).numpy()).save(f'tmp_dir/train_vis_data{i}.png')
-
         train_tracker.dataloading_s = time.perf_counter() - start_time
 
         for key in batch:

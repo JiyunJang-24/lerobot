@@ -32,6 +32,7 @@ import torchvision
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from torch import Tensor, nn
+from unimatch.unimatch import UniMatch, UniMatchVisionBackbone, Flow2LLaMAAdapter
 
 from lerobot.common.constants import OBS_ENV, OBS_ROBOT
 from lerobot.common.policies.diffusion.configuration_diffusion import DiffusionConfig
@@ -44,6 +45,39 @@ from lerobot.common.policies.utils import (
     populate_queues,
 )
 
+optical_backbone_cfg = {
+    "feature_channels":128,
+    "num_scales":2,
+    "upsample_factor":4,
+    "num_head":1,
+    "ffn_dim_expansion":4,
+    "num_transformer_layers":6,
+    "reg_refine":None,
+    "task":'flow',
+    "resume": "unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
+    "strict_resume": False,
+}
+
+def load_optical_backbone(device):
+    #define optical backbone class
+    #TODO JY: unimatch에서 observation, action을 둘 다 받아서, feature를 뽑는 adapter를 만들어야함
+    backbone_model = UniMatch(feature_channels=optical_backbone_cfg["feature_channels"],
+                    num_scales=optical_backbone_cfg["num_scales"],
+                    upsample_factor=optical_backbone_cfg["upsample_factor"],
+                    num_head=optical_backbone_cfg["num_head"],
+                    ffn_dim_expansion=optical_backbone_cfg["ffn_dim_expansion"],
+                    num_transformer_layers=optical_backbone_cfg["num_transformer_layers"],
+                    reg_refine=optical_backbone_cfg["reg_refine"],
+                    task=optical_backbone_cfg["task"],
+                    ).to(device)
+
+    if optical_backbone_cfg["resume"]:
+        print('Load checkpoint: %s' % optical_backbone_cfg["resume"])
+        checkpoint = torch.load(optical_backbone_cfg["resume"])
+        backbone_model.load_state_dict(checkpoint['model'], strict=optical_backbone_cfg["strict_resume"])
+    backbone_projector_model = UniMatchVisionBackbone(base_unimatch=backbone_model, fuse_multiscale=False)
+
+    return backbone_projector_model
 
 class DiffusionPolicy(PreTrainedPolicy):
     """
@@ -77,7 +111,14 @@ class DiffusionPolicy(PreTrainedPolicy):
         self.unnormalize_outputs = Unnormalize(
             config.output_features, config.normalization_mapping, dataset_stats
         )
-
+        #TODO JY: dynamic feature normalization 추가해야함 input은 dynamic용 이미지 추가
+        #TODO JY: output은 액션들 normalize해서 모델이 이해할 수 있도록 해야함
+        self.normalize_inputs_with_dynamic_feature = Normalize(
+            config.input_features, config.normalization_mapping, dataset_stats
+        )
+        self.normalize_targets_with_dynamic_feature = Normalize(
+            config.output_features, config.normalization_mapping, dataset_stats
+        )
         # queues are populated during rollout of the policy, they contain the n latest observations and actions
         self._queues = None
 
@@ -143,16 +184,29 @@ class DiffusionPolicy(PreTrainedPolicy):
         action = self._queues["action"].popleft()
         return action
 
-    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, None]:
+    def forward(self, batch: dict[str, Tensor], use_dynamic_feature: bool = False) -> tuple[Tensor, None]:
         """Run the batch through the model and compute the loss for training or validation."""
-        batch = self.normalize_inputs(batch)
-        if self.config.image_features:
-            batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
-            batch["observation.images"] = torch.stack(
-                [batch[key] for key in self.config.image_features], dim=-4
-            )
-        batch = self.normalize_targets(batch)
-        loss = self.diffusion.compute_loss(batch)
+        if use_dynamic_feature:
+            batch = self.normalize_inputs_with_dynamic_feature(batch)
+            if self.config.image_features:
+                batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
+                batch["observation.images"] = torch.stack(
+                    [batch[key] for key in self.config.image_features], dim=-4
+                )
+                batch["observation.dynamic_images"] = torch.stack(
+                    [batch[key] for key in self.config.image_features], dim=-4
+                )
+            batch = self.normalize_targets_with_dynamic_feature(batch)
+            loss = self.diffusion.compute_loss(batch)
+        else:
+            batch = self.normalize_inputs(batch)
+            if self.config.image_features:
+                batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
+                batch["observation.images"] = torch.stack(
+                    [batch[key] for key in self.config.image_features], dim=-4
+                )
+            batch = self.normalize_targets(batch)
+            loss = self.diffusion.compute_loss(batch)
         # no output_dict so returning None
         return loss, None
 
@@ -189,6 +243,13 @@ class DiffusionModel(nn.Module):
             else:
                 self.rgb_encoder = DiffusionRgbEncoder(config)
                 global_cond_dim += self.rgb_encoder.feature_dim * num_images
+
+        if self.config.use_dynamic_feature:
+            num_images = len(self.config.image_features)
+            #TODO JY: Unimatch import해서 가져와야함.
+            self.dynamic_encoder = load_optical_backbone(get_device_from_parameters(self))
+            global_cond_dim += self.dynamic_encoder.feature_dim * num_images * self.config.num_dynamic_features
+
         if self.config.env_state_feature:
             global_cond_dim += self.config.env_state_feature.shape[0]
 
@@ -271,7 +332,27 @@ class DiffusionModel(nn.Module):
                 img_features = einops.rearrange(
                     img_features, "(b s n) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
                 )
+            #img_features는 batch_size * n_obs_steps * feature_dim
             global_cond_feats.append(img_features)
+            if self.config.use_dynamic_feature:
+                # Combine batch and sequence dims while rearranging to make the camera index dimension first.
+                #TODO JY: dynamic obs와 action 확인
+                dynamic_images = einops.rearrange(batch["dynamic.image"], "b s n ... -> n (b s) ...")
+                dynamic_actions = einops.rearrange(batch["dynamic.action"], "b s n ... -> n (b s) ...")
+                dynamic_features_list = torch.cat(
+                    [
+                        self.dynamic_encoder(torch.concat(dynamic_images[idx], dynamic_images[idx + 1]), actions)
+
+                        for idx, actions in enumerate(dynamic_actions)
+                    ]
+                )
+                # Separate batch and sequence dims back out. The camera index dim gets absorbed into the
+                # feature dim (effectively concatenating the camera features).
+                dynamic_features = einops.rearrange(
+                    dynamic_features_list, "(n b s) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
+                )
+                #dynamic_features는 batch_size * num_dynamic_features * feature_dim
+                global_cond_feats.append(dynamic_features)
 
         if self.config.env_state_feature:
             global_cond_feats.append(batch[OBS_ENV])
