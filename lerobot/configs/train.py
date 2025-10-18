@@ -65,6 +65,9 @@ class TrainPipelineConfig(HubMixin):
     wandb: WandBConfig = field(default_factory=WandBConfig)
     use_action_avg: bool = True
     window_size: int = 5
+    axis_augmentation: bool = False
+    sign_augmentation: list[bool] = field(default_factory=lambda: [False, False, False])
+    
     def __post_init__(self):
         self.checkpoint_path = None
 

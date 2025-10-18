@@ -1048,10 +1048,12 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         delta_timestamps: dict[list[float]] | None = None,
         tolerances_s: dict | None = None,
         download_videos: bool = True,
+        video_backend: str | None = None,
         use_action_avg: bool = False,
         window_size: int | None = None,
-        video_backend: str | None = None,
         use_dynamic_feature: bool = False,
+        axis_augmentation: bool = False,
+        sign_augmentation: list[bool] = [False, False, False],
     ):
         super().__init__()
         self.repo_ids = repo_ids
@@ -1102,6 +1104,8 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         self.use_action_avg = use_action_avg
         self.window_size = window_size
         self.use_dynamic_feature = use_dynamic_feature
+        self.axis_augmentation = axis_augmentation # change x, y axis for data augmentation
+        self.sign_augmentation = sign_augmentation
 
     @property
     def repo_id_to_index(self):
