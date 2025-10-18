@@ -91,6 +91,7 @@ class DiffusionPolicy(PreTrainedPolicy):
         self,
         config: DiffusionConfig,
         dataset_stats: dict[str, dict[str, Tensor]] | None = None,
+        dataset_aug_stats: dict[str, dict[str, Tensor]] | None = None,
     ):
         """
         Args:
@@ -102,7 +103,7 @@ class DiffusionPolicy(PreTrainedPolicy):
         super().__init__(config)
         config.validate_features()
         self.config = config
-
+        import pdb; pdb.set_trace()
         self.normalize_inputs = Normalize(config.input_features, config.normalization_mapping, dataset_stats)
         if self.config.use_dynamic_feature:
             config.output_features['dynamic.action'] = config.output_features['action']

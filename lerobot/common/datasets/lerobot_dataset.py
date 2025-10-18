@@ -84,11 +84,14 @@ class LeRobotDatasetMetadata:
         root: str | Path | None = None,
         revision: str | None = None,
         force_cache_sync: bool = False,
+        axis_augmentation: bool = False,
+        sign_augmentation: list[bool]= [False, False, False],
     ):
         self.repo_id = repo_id
         self.revision = revision if revision else CODEBASE_VERSION
         self.root = Path(root) if root is not None else HF_LEROBOT_HOME / repo_id
-
+        self.axis_augmentation = axis_augmentation
+        self.sign_augmentation = sign_augmentation
         try:
             if force_cache_sync:
                 raise FileNotFoundError
@@ -112,6 +115,57 @@ class LeRobotDatasetMetadata:
         else:
             self.episodes_stats = load_episodes_stats(self.root)
             self.stats = aggregate_stats(list(self.episodes_stats.values()))
+        if self.axis_augmentation:
+            min_vals = np.array(self.stats["action"]["min"].copy())
+            max_vals = np.array(self.stats["action"]["max"].copy())
+            mean_vals = np.array(self.stats["action"]["mean"].copy())
+            std_vals = np.array(self.stats["action"]["std"].copy())
+            self.aug_stats = {
+                "action": {
+                    "min": np.concatenate([min_vals[1:2], min_vals[0:1], min_vals[2:]]),
+                    "max":  np.concatenate([max_vals[1:2], max_vals[0:1], max_vals[2:]]),
+                    "mean": np.concatenate([mean_vals[1:2], mean_vals[0:1], mean_vals[2:]]),
+                    "std":  np.concatenate([std_vals[1:2], std_vals[0:1], std_vals[2:]]),
+                    "count": self.stats["action"]["count"],
+                }
+            }
+        if self.sign_augmentation != [False, False, False] and not self.axis_augmentation:
+            self.aug_stats = {}
+            for key in ["action"]:
+                min_vals = self.stats[key]["min"].copy()
+                max_vals = self.stats[key]["max"].copy()
+                mean_vals = self.stats[key]["mean"].copy()
+                std_vals = self.stats[key]["std"].copy()
+                for i, sign_aug in enumerate(self.sign_augmentation):
+                    if sign_aug:
+                        min_vals[i] = -self.stats[key]["max"][i].copy()
+                        max_vals[i] = -self.stats[key]["min"][i].copy()
+                        mean_vals[i] = -self.stats[key]["mean"][i].copy()
+                self.aug_stats[key] = {
+                    "min": min_vals,
+                    "max": max_vals,
+                    "mean": mean_vals,
+                    "std": std_vals,
+                    "count": self.stats[key]["count"].copy(),
+                }
+        elif self.sign_augmentation != [False, False, False] and self.axis_augmentation:
+            for key in ["action"]:
+                min_vals = self.aug_stats[key]["min"].copy()
+                max_vals = self.aug_stats[key]["max"].copy()
+                mean_vals = self.aug_stats[key]["mean"].copy()
+                std_vals = self.aug_stats[key]["std"].copy()
+                for i, sign_aug in enumerate(self.sign_augmentation):
+                    if sign_aug:
+                        min_vals[i] = -self.aug_stats[key]["max"][i]
+                        max_vals[i] = -self.aug_stats[key]["min"][i]
+                        mean_vals[i] = -self.aug_stats[key]["mean"][i]
+                self.aug_stats[key] = {
+                    "min": min_vals,
+                    "max": max_vals,
+                    "mean": mean_vals,
+                    "std": std_vals,
+                    "count": self.stats[key]["count"].copy(),
+                }
 
     def pull_from_repo(
         self,
@@ -364,6 +418,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         force_cache_sync: bool = False,
         download_videos: bool = True,
         video_backend: str | None = None,
+        axis_augmentation: bool = False,
+        sign_augmentation: list[bool]= [False, False, False],
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -485,7 +541,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
         # Load metadata
         self.meta = LeRobotDatasetMetadata(
-            self.repo_id, self.root, self.revision, force_cache_sync=force_cache_sync
+            self.repo_id, self.root, self.revision, force_cache_sync=force_cache_sync, axis_augmentation=axis_augmentation, sign_augmentation=sign_augmentation
         )
         if self.episodes is not None and self.meta._version >= packaging.version.parse("v2.1"):
             episodes_stats = [self.meta.episodes_stats[ep_idx] for ep_idx in self.episodes]
@@ -1061,6 +1117,8 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         self.tolerances_s = tolerances_s if tolerances_s else {repo_id: 1e-4 for repo_id in repo_ids}
         # Construct the underlying datasets passing everything but `transform` and `delta_timestamps` which
         # are handled by this class.
+        self.axis_augmentation = axis_augmentation # change x, y axis for data augmentation
+        self.sign_augmentation = sign_augmentation
         self._datasets = [
             LeRobotDataset(
                 repo_id,
@@ -1069,6 +1127,8 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                 image_transforms=image_transforms,
                 delta_timestamps=delta_timestamps[repo_id],
                 tolerance_s=self.tolerances_s[repo_id],
+                axis_augmentation=self.axis_augmentation,
+                sign_augmentation=self.sign_augmentation,
                 download_videos=download_videos,
                 video_backend=video_backend,
             )
@@ -1099,14 +1159,11 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         # TODO(rcadene, aliberts): We should not perform this aggregation for datasets
         # with multiple robots of different ranges. Instead we should have one normalization
         # per robot.
+        
         self.stats = aggregate_stats([dataset.meta.stats for dataset in self._datasets])
-
         self.use_action_avg = use_action_avg
         self.window_size = window_size
         self.use_dynamic_feature = use_dynamic_feature
-        self.axis_augmentation = axis_augmentation # change x, y axis for data augmentation
-        self.sign_augmentation = sign_augmentation
-
     @property
     def repo_id_to_index(self):
         """Return a mapping from dataset repo_id to a dataset index automatically created by this class.

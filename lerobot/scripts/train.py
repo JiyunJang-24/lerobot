@@ -139,7 +139,7 @@ def train(cfg: TrainPipelineConfig):
     if cfg.eval_freq > 0 and cfg.env is not None:
         logging.info("Creating env")
         eval_env = make_env(cfg.env, n_envs=cfg.eval.batch_size)
-
+    
     logging.info("Creating policy")
     if isinstance(dataset, MultiLeRobotDataset):
         ds_meta = dataset._datasets[0].meta
