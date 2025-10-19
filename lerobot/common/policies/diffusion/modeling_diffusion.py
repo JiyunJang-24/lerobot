@@ -102,7 +102,6 @@ class DiffusionPolicy(PreTrainedPolicy):
         """
         super().__init__(config)
         config.validate_features()
-        import pdb; pdb.set_trace()
         self.config = config
         self.normalize_inputs = Normalize(config.input_features, config.normalization_mapping, dataset_stats)
         if self.config.use_dynamic_feature:

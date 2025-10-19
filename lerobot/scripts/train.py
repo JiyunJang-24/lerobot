@@ -20,13 +20,14 @@ import time
 from contextlib import nullcontext
 from pprint import pformat
 from typing import Any
-
+import json
 import torch
+import os
 from termcolor import colored
 from torch.amp import GradScaler
 from torch.optim import Optimizer
 from PIL import Image
-
+import numpy as np
 from lerobot.common.datasets.factory import make_dataset
 from lerobot.common.datasets.sampler import EpisodeAwareSampler
 from lerobot.common.datasets.utils import cycle
@@ -153,7 +154,6 @@ def train(cfg: TrainPipelineConfig):
         ds_meta=ds_meta,
         libero_dataset=True,
     )
-
     logging.info("Creating optimizer and scheduler")
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
     grad_scaler = GradScaler(device.type, enabled=cfg.policy.use_amp)
@@ -268,7 +268,12 @@ def train(cfg: TrainPipelineConfig):
         if cfg.save_checkpoint and is_saving_step:
             logging.info(f"Checkpoint policy after step {step}")
             checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
-            save_checkpoint(checkpoint_dir, step, cfg, policy, optimizer, lr_scheduler)
+            try: 
+                ds_meta.stats['aug_stats'] = ds_meta.aug_stats
+            except:
+                print("ds_meta has not aug_stats")
+
+            save_checkpoint(checkpoint_dir, step, cfg, policy, optimizer, lr_scheduler, ds_meta.stats)
             update_last_checkpoint(checkpoint_dir)
             if wandb_logger:
                 wandb_logger.log_policy(checkpoint_dir)

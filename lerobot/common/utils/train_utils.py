@@ -33,7 +33,24 @@ from lerobot.common.optim.schedulers import load_scheduler_state, save_scheduler
 from lerobot.common.policies.pretrained import PreTrainedPolicy
 from lerobot.common.utils.random_utils import load_rng_state, save_rng_state
 from lerobot.configs.train import TrainPipelineConfig
+import json
+import numpy as np
+import torch
+from pathlib import Path
 
+def _to_jsonable(obj):
+    """Make nested structures JSON-serializable."""
+    if isinstance(obj, torch.Tensor):
+        return obj.detach().cpu().tolist()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.floating, np.integer)):
+        return obj.item()
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+    return obj
 
 def log_output_dir(out_dir):
     logging.info(colored("Output dir:", "yellow", attrs=["bold"]) + f" {out_dir}")
@@ -73,6 +90,7 @@ def save_checkpoint(
     cfg: TrainPipelineConfig,
     policy: PreTrainedPolicy,
     optimizer: Optimizer,
+    stats: dict,
     scheduler: LRScheduler | None = None,
 ) -> None:
     """This function creates the following directory structure:
@@ -99,6 +117,10 @@ def save_checkpoint(
     pretrained_dir = checkpoint_dir / PRETRAINED_MODEL_DIR
     policy.save_pretrained(pretrained_dir)
     cfg.save_pretrained(pretrained_dir)
+    # 2) stats 저장 (JSON)
+    stats_path = pretrained_dir / "stats.json"
+    with open(stats_path, "w", encoding="utf-8") as f:
+        json.dump(_to_jsonable(stats), f, indent=2, ensure_ascii=False)
     save_training_state(checkpoint_dir, step, optimizer, scheduler)
 
 
