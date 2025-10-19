@@ -36,7 +36,7 @@ from unimatch.unimatch import UniMatch, UniMatchVisionBackbone, Flow2LLaMAAdapte
 
 from lerobot.common.constants import OBS_ENV, OBS_ROBOT
 from lerobot.common.policies.diffusion.configuration_diffusion import DiffusionConfig
-from lerobot.common.policies.normalize import Normalize, Unnormalize
+from lerobot.common.policies.normalize import Normalize, Unnormalize, Normalize_With_Aug, Unnormalize_With_Aug
 from lerobot.common.policies.pretrained import PreTrainedPolicy
 from lerobot.common.policies.utils import (
     get_device_from_parameters,
@@ -104,15 +104,14 @@ class DiffusionPolicy(PreTrainedPolicy):
         config.validate_features()
         self.config = config
         self.normalize_inputs = Normalize(config.input_features, config.normalization_mapping, dataset_stats)
-        #TODO if axis augmentation이나, sign augmentaiton을 적용하면, 여기서 normalize할 때 축을 바꿔줘야함!
-        # if self.config.use_dynamic_feature:
-        #     config.output_features['dynamic.action'] = config.output_features['action']
-        #     dataset_stats['dynamic.action'] = dataset_stats['action']
-        self.normalize_targets = Normalize(
-            config.output_features, config.normalization_mapping, dataset_stats
+        if self.config.use_dynamic_feature:
+            config.output_features['dynamic.action'] = config.output_features['action']
+            dataset_stats['dynamic.action'] = dataset_stats['action']
+        self.normalize_targets = Normalize_With_Aug(
+            config.output_features, config.normalization_mapping, dataset_stats, dataset_aug_stats
         )
-        self.unnormalize_outputs = Unnormalize(
-            config.output_features, config.normalization_mapping, dataset_stats
+        self.unnormalize_outputs = Unnormalize_With_Aug(
+            config.output_features, config.normalization_mapping, dataset_stats, dataset_aug_stats
         )
         # queues are populated during rollout of the policy, they contain the n latest observations and actions
         self._queues = None
@@ -188,10 +187,6 @@ class DiffusionPolicy(PreTrainedPolicy):
             batch["observation.images"] = torch.stack(
                 [batch[key] for key in self.config.image_features], dim=-4
             )
-            if self.config.use_dynamic_feature:
-                batch["observation.dynamic_images"] = torch.stack(
-                    [batch[key] for key in self.config.image_features], dim=-4
-                )
         if self.config.use_normalize_for_action:
             batch = self.normalize_targets(batch)
         

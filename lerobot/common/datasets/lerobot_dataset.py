@@ -1449,7 +1449,6 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             raise AssertionError("We expect the loop to break out as long as the index is within bounds.")
         
         item = self._datasets[dataset_idx][idx - start_idx]
-        import pdb; pdb.set_trace()
         item["action"], augmented_info = self.augment_action_sequence(item["action"])
         item["augmented_info"] = augmented_info
         if self.use_dynamic_feature:
@@ -1477,7 +1476,6 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                 actions.append(act_seq)
             item["dynamic.image"] = torch.stack(images)
             item["dynamic.action"] = torch.stack(actions)
-            import pdb; pdb.set_trace()
             item["dynamic.action"], dynamic_augmented_info = self.augment_action_sequence(item["dynamic.action"], info=augmented_info)
             item["dynamic.augmented_info"] = dynamic_augmented_info
             
