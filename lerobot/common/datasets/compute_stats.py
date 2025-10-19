@@ -163,7 +163,6 @@ def aggregate_stats(stats_list: list[dict[str, dict]]) -> dict[str, dict[str, np
     - new_mean = (mean of all data, weighted by counts)
     - new_std = (std of all data)
     """
-
     _assert_type_and_shape(stats_list)
 
     data_keys = {key for stats in stats_list for key in stats}

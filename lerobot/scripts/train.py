@@ -143,6 +143,8 @@ def train(cfg: TrainPipelineConfig):
     logging.info("Creating policy")
     if isinstance(dataset, MultiLeRobotDataset):
         ds_meta = dataset._datasets[0].meta
+        #TODO JY: 이건 확인해야하는데, stats를 전체로 쓰는게 더 좋은거 아닌가? 지금은 첫번째 dataset의 stats로 전체를 normalize 하는 중임
+        #ds_meta.stats = dataset.stats
     else:
         ds_meta = dataset.meta
     policy = make_policy(

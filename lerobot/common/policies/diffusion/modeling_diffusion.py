@@ -102,11 +102,11 @@ class DiffusionPolicy(PreTrainedPolicy):
         super().__init__(config)
         config.validate_features()
         self.config = config
-
         self.normalize_inputs = Normalize(config.input_features, config.normalization_mapping, dataset_stats)
-        if self.config.use_dynamic_feature:
-            config.output_features['dynamic.action'] = config.output_features['action']
-            dataset_stats['dynamic.action'] = dataset_stats['action']
+        #TODO if axis augmentation이나, sign augmentaiton을 적용하면, 여기서 normalize할 때 축을 바꿔줘야함!
+        # if self.config.use_dynamic_feature:
+        #     config.output_features['dynamic.action'] = config.output_features['action']
+        #     dataset_stats['dynamic.action'] = dataset_stats['action']
         self.normalize_targets = Normalize(
             config.output_features, config.normalization_mapping, dataset_stats
         )
@@ -171,7 +171,8 @@ class DiffusionPolicy(PreTrainedPolicy):
             actions = self.diffusion.generate_actions(batch)
 
             # TODO(rcadene): make above methods return output dictionary?
-            actions = self.unnormalize_outputs({"action": actions})["action"]
+            if self.config.use_normalize_for_action:
+                actions = self.unnormalize_outputs({"action": actions})["action"]
 
             self._queues["action"].extend(actions.transpose(0, 1))
 
@@ -190,7 +191,9 @@ class DiffusionPolicy(PreTrainedPolicy):
                 batch["observation.dynamic_images"] = torch.stack(
                     [batch[key] for key in self.config.image_features], dim=-4
                 )
-        batch = self.normalize_targets(batch)
+        if self.config.use_normalize_for_action:
+            batch = self.normalize_targets(batch)
+        
         loss = self.diffusion.compute_loss(batch)
 
         # no output_dict so returning None

@@ -17,7 +17,8 @@ import contextlib
 import logging
 import shutil
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Tuple, Dict, Any
+
 import random
 import datasets
 import numpy as np
@@ -1105,8 +1106,112 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         self.window_size = window_size
         self.use_dynamic_feature = use_dynamic_feature
         self.axis_augmentation = axis_augmentation # change x, y axis for data augmentation
-        self.sign_augmentation = sign_augmentation
+        self.sign_augmentation = sign_augmentation #[False, False, False]
 
+    def augment_action_sequence(
+        self,
+        action: torch.Tensor,          # (T, 7)
+        xy_idx: tuple[int, int] = (0, 1),
+        z_idx: int = 2,
+        p_axis: float = 0.5,           # ← 축 스왑 확률
+        p_sign: float = 0.5,           # ← 부호 반전 확률
+        info: dict | None = None,      # ← 주어지면 그 내용대로 재현 적용
+    ) -> tuple[torch.Tensor, dict]:
+        """
+        입력: (T,7) 액션 시퀀스.
+        - info is None:
+            * self.axis_augmentation=True 이면 p_axis 확률로 x/y 스왑(시퀀스 전체 동일)
+            * self.sign_augmentation=[sx,sy,sz]에서 True인 축은 p_sign 확률로 (시퀀스 전체) 부호 반전
+            (축별 on/off는 sign_augmentation으로 결정)
+        - info is not None:
+            * info에 명시된 applied_axis / applied_sign / xy_swapped / sign_flipped을 그대로 재현(확률/설정 무시)
+        반환: (aug_action(T,7), info)
+        info = {
+            "applied_axis": bool,         # 축 스왑을 적용했는지
+            "applied_sign": bool,         # 부호 반전을 적용했는지(적어도 한 축)
+            "xy_swapped": bool,           # 실제 x/y 스왑 수행 여부
+            "sign_flipped": {"x":bool, "y":bool, "z":bool}
+        }
+        """
+        assert torch.is_tensor(action), "action must be a torch.Tensor"
+        assert action.dim() == 2 and action.size(-1) == 7, f"Expected (T,7), got {tuple(action.shape)}"
+
+        T, D = action.shape
+        x_i, y_i = xy_idx
+        assert D > max(x_i, y_i, z_idx), "action last dim must cover x/y/z indices"
+
+        aug = action.clone()
+        device = aug.device
+
+        # -------- 1) info가 주어진 경우: 그대로 재현 --------
+        if info is not None:
+            # 하위 호환: applied_axis / applied_sign 없으면 기존 키로 유추
+            applied_axis = bool(info.get("applied_axis", info.get("xy_swapped", False)))
+            applied_sign = bool(info.get("applied_sign", False))
+            xy_swapped   = bool(info.get("xy_swapped", False))
+            sf = info.get("sign_flipped", {}) or {}
+            sx = bool(sf.get("x", False))
+            sy = bool(sf.get("y", False))
+            sz = bool(sf.get("z", False))
+            
+            if applied_sign:
+                if sx: aug[:, x_i] = -aug[:, x_i]
+                if sy: aug[:, y_i] = -aug[:, y_i]
+                if sz: aug[:, z_idx] = -aug[:, z_idx]
+
+            if applied_axis and xy_swapped:
+                x_vals = aug[:, x_i].clone()
+                y_vals = aug[:, y_i].clone()
+                aug[:, x_i] = y_vals
+                aug[:, y_i] = x_vals
+
+
+            out_info = {
+                "applied_axis": applied_axis,
+                "applied_sign": applied_sign,
+                "xy_swapped": xy_swapped,
+                "sign_flipped": {"x": sx, "y": sy, "z": sz},
+            }
+            return aug, out_info
+
+        # -------- 2) info가 None인 경우: 확률/설정 기반 --------
+        # sign 축 사용 여부 (설정)
+        sx, sy, sz = (self.sign_augmentation + [False, False, False])[:3]
+
+        # 각 증강의 적용 여부를 독립적으로 샘플링
+        do_sign_x = bool((sx) and (torch.rand((), device=device) < p_sign).item())
+        do_sign_y = bool((sy) and (torch.rand((), device=device) < p_sign).item())
+        do_sign_z = bool((sz) and (torch.rand((), device=device) < p_sign).item())
+
+        # 축별 on/off에 따라 부호 반전
+        flip_x = bool(do_sign_x and sx)
+        flip_y = bool(do_sign_y and sy)
+        flip_z = bool(do_sign_z and sz)
+
+        if flip_x: aug[:, x_i] = -aug[:, x_i]
+        if flip_y: aug[:, y_i] = -aug[:, y_i]
+        if flip_z: aug[:, z_idx] = -aug[:, z_idx]
+        
+        do_axis = bool(self.axis_augmentation and (torch.rand((), device=device) < p_axis).item())
+        xy_swapped = False
+        if do_axis:
+            x_vals = aug[:, x_i].clone()
+            y_vals = aug[:, y_i].clone()
+            aug[:, x_i] = y_vals
+            aug[:, y_i] = x_vals
+            xy_swapped = True
+
+        out_info = {
+            "applied_axis": do_axis,
+            "applied_sign": bool(flip_x or flip_y or flip_z),
+            "xy_swapped": xy_swapped,
+            "sign_flipped": {
+                "x": flip_x,
+                "y": flip_y,
+                "z": flip_z,
+            },
+        }
+        return aug, out_info
     @property
     def repo_id_to_index(self):
         """Return a mapping from dataset repo_id to a dataset index automatically created by this class.
@@ -1206,7 +1311,9 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             raise AssertionError("We expect the loop to break out as long as the index is within bounds.")
         
         item = self._datasets[dataset_idx][idx - start_idx]
-
+        import pdb; pdb.set_trace()
+        item["action"], augmented_info = self.augment_action_sequence(item["action"])
+        item["augmented_info"] = augmented_info
         if self.use_dynamic_feature:
             indices = random.sample(range(self._datasets[dataset_idx].num_frames-self.window_size), 3) # ensure we have enough frames for +5
             repo_name = self.repo_ids[dataset_idx]
@@ -1232,6 +1339,10 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                 actions.append(act_seq)
             item["dynamic.image"] = torch.stack(images)
             item["dynamic.action"] = torch.stack(actions)
+            import pdb; pdb.set_trace()
+            item["dynamic.action"], dynamic_augmented_info = self.augment_action_sequence(item["dynamic.action"], info=augmented_info)
+            item["dynamic.augmented_info"] = dynamic_augmented_info
+            
         item["dataset_index"] = torch.tensor(dataset_idx)
 
         for data_key in self.disabled_features:
