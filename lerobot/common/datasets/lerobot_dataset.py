@@ -76,6 +76,44 @@ from lerobot.common.robot_devices.robots.utils import Robot
 
 CODEBASE_VERSION = "v2.1"
 
+def _make_aug_variant_from_base(base_action_stats, swap_xy: bool, flip_x: bool, flip_y: bool):
+        """
+        base_action_stats: dict with keys ["min","max","mean","std","count"]
+        values are array-like (길이 >= 2; 0:x, 1:y, 2:z, ...)
+        변환 규칙:
+        - swap_xy: x↔y 인덱스 스왑 (min/max/mean/std 전부 스왑)
+        - flip_x or flip_y: 그 축만 부호 반전 (min,max 뒤집힘; mean 부호 반전; std는 불변)
+        """
+        min_vals  = np.array(base_action_stats["min"],  copy=True)
+        max_vals  = np.array(base_action_stats["max"],  copy=True)
+        mean_vals = np.array(base_action_stats["mean"], copy=True)
+        std_vals  = np.array(base_action_stats["std"],  copy=True)
+        count_val = base_action_stats["count"]
+
+
+        # 1) sign flip (축별)
+        if flip_x:
+            min_vals[0], max_vals[0] = -max_vals[0], -min_vals[0]
+            mean_vals[0] = -mean_vals[0]
+            # std_vals[0] unchanged
+
+        if flip_y:
+            min_vals[1], max_vals[1] = -max_vals[1], -min_vals[1]
+            mean_vals[1] = -mean_vals[1]
+            # std_vals[1] unchanged
+
+        # 2) x<->y swap (인덱스 0 ↔ 1)
+        if swap_xy:
+            for arr in (min_vals, max_vals, mean_vals, std_vals):
+                arr[[0, 1]] = arr[[1, 0]]
+
+        return {
+            "min":   min_vals,
+            "max":   max_vals,
+            "mean":  mean_vals,
+            "std":   std_vals,
+            "count": count_val,
+        }
 
 class LeRobotDatasetMetadata:
     def __init__(
@@ -115,57 +153,95 @@ class LeRobotDatasetMetadata:
         else:
             self.episodes_stats = load_episodes_stats(self.root)
             self.stats = aggregate_stats(list(self.episodes_stats.values()))
-        if self.axis_augmentation:
-            min_vals = np.array(self.stats["action"]["min"].copy())
-            max_vals = np.array(self.stats["action"]["max"].copy())
-            mean_vals = np.array(self.stats["action"]["mean"].copy())
-            std_vals = np.array(self.stats["action"]["std"].copy())
-            self.aug_stats = {
-                "action": {
-                    "min": np.concatenate([min_vals[1:2], min_vals[0:1], min_vals[2:]]),
-                    "max":  np.concatenate([max_vals[1:2], max_vals[0:1], max_vals[2:]]),
-                    "mean": np.concatenate([mean_vals[1:2], mean_vals[0:1], mean_vals[2:]]),
-                    "std":  np.concatenate([std_vals[1:2], std_vals[0:1], std_vals[2:]]),
-                    "count": self.stats["action"]["count"],
-                }
-            }
-        if self.sign_augmentation != [False, False, False] and not self.axis_augmentation:
-            self.aug_stats = {}
-            for key in ["action"]:
-                min_vals = self.stats[key]["min"].copy()
-                max_vals = self.stats[key]["max"].copy()
-                mean_vals = self.stats[key]["mean"].copy()
-                std_vals = self.stats[key]["std"].copy()
-                for i, sign_aug in enumerate(self.sign_augmentation):
-                    if sign_aug:
-                        min_vals[i] = -self.stats[key]["max"][i].copy()
-                        max_vals[i] = -self.stats[key]["min"][i].copy()
-                        mean_vals[i] = -self.stats[key]["mean"][i].copy()
-                self.aug_stats[key] = {
-                    "min": min_vals,
-                    "max": max_vals,
-                    "mean": mean_vals,
-                    "std": std_vals,
-                    "count": self.stats[key]["count"].copy(),
-                }
-        elif self.sign_augmentation != [False, False, False] and self.axis_augmentation:
-            for key in ["action"]:
-                min_vals = self.aug_stats[key]["min"].copy()
-                max_vals = self.aug_stats[key]["max"].copy()
-                mean_vals = self.aug_stats[key]["mean"].copy()
-                std_vals = self.aug_stats[key]["std"].copy()
-                for i, sign_aug in enumerate(self.sign_augmentation):
-                    if sign_aug:
-                        min_vals[i] = -self.aug_stats[key]["max"][i]
-                        max_vals[i] = -self.aug_stats[key]["min"][i]
-                        mean_vals[i] = -self.aug_stats[key]["mean"][i]
-                self.aug_stats[key] = {
-                    "min": min_vals,
-                    "max": max_vals,
-                    "mean": mean_vals,
-                    "std": std_vals,
-                    "count": self.stats[key]["count"].copy(),
-                }
+
+        self.aug_stats = {}
+        self.build_all_aug_stats()
+
+        # if self.axis_augmentation:
+        #     min_vals = np.array(self.stats["action"]["min"].copy())
+        #     max_vals = np.array(self.stats["action"]["max"].copy())
+        #     mean_vals = np.array(self.stats["action"]["mean"].copy())
+        #     std_vals = np.array(self.stats["action"]["std"].copy())
+        #     self.aug_stats = {
+        #         "action": {
+        #             "min": np.concatenate([min_vals[1:2], min_vals[0:1], min_vals[2:]]),
+        #             "max":  np.concatenate([max_vals[1:2], max_vals[0:1], max_vals[2:]]),
+        #             "mean": np.concatenate([mean_vals[1:2], mean_vals[0:1], mean_vals[2:]]),
+        #             "std":  np.concatenate([std_vals[1:2], std_vals[0:1], std_vals[2:]]),
+        #             "count": self.stats["action"]["count"],
+        #         }
+        #     }
+        # if self.sign_augmentation != [False, False, False] and not self.axis_augmentation:
+        #     self.aug_stats = {}
+        #     for key in ["action"]:
+        #         min_vals = self.stats[key]["min"].copy()
+        #         max_vals = self.stats[key]["max"].copy()
+        #         mean_vals = self.stats[key]["mean"].copy()
+        #         std_vals = self.stats[key]["std"].copy()
+        #         for i, sign_aug in enumerate(self.sign_augmentation):
+        #             if sign_aug:
+        #                 min_vals[i] = -self.stats[key]["max"][i].copy()
+        #                 max_vals[i] = -self.stats[key]["min"][i].copy()
+        #                 mean_vals[i] = -self.stats[key]["mean"][i].copy()
+        #         self.aug_stats[key] = {
+        #             "min": min_vals,
+        #             "max": max_vals,
+        #             "mean": mean_vals,
+        #             "std": std_vals,
+        #             "count": self.stats[key]["count"].copy(),
+        #         }
+        # elif self.sign_augmentation != [False, False, False] and self.axis_augmentation:
+        #     for key in ["action"]:
+        #         min_vals = self.aug_stats[key]["min"].copy()
+        #         max_vals = self.aug_stats[key]["max"].copy()
+        #         mean_vals = self.aug_stats[key]["mean"].copy()
+        #         std_vals = self.aug_stats[key]["std"].copy()
+        #         for i, sign_aug in enumerate(self.sign_augmentation):
+        #             if sign_aug:
+        #                 min_vals[i] = -self.aug_stats[key]["max"][i]
+        #                 max_vals[i] = -self.aug_stats[key]["min"][i]
+        #                 mean_vals[i] = -self.aug_stats[key]["mean"][i]
+        #         self.aug_stats[key] = {
+        #             "min": min_vals,
+        #             "max": max_vals,
+        #             "mean": mean_vals,
+        #             "std": std_vals,
+        #             "count": self.stats[key]["count"].copy(),
+        #         }
+
+    def build_all_aug_stats(self):
+        """self.stats['action'] 기준으로 8가지 조합의 통계를 self.aug_stats에 저장"""
+        base = self.stats["action"]
+        self.aug_stats = {}  # 전부 재생성
+
+        for swap in (0, 1):         # 0: no swap, 1: x<->y swap
+            for fx in (0, 1):       # 0: don't flip x, 1: flip x
+                for fy in (0, 1):   # 0: don't flip y, 1: flip y
+                    key = f"swap{swap}_fx{fx}_fy{fy}"
+                    self.aug_stats[key] = _make_aug_variant_from_base(
+                        base_action_stats=base,
+                        swap_xy=bool(swap),
+                        flip_x=bool(fx),
+                        flip_y=bool(fy),
+                    )
+
+    def select_aug_stats_by_info(self, info: dict):
+        """
+        증강 info(dict)로부터 해당 조합 키를 만들고, self.aug_stats에서 해당 통계를 반환.
+        info 예:
+        {
+            "applied_axis": bool,
+            "applied_sign": bool,
+            "xy_swapped": bool,
+            "sign_flipped": {"x": bool, "y": bool, "z": bool}
+        }
+        """
+        swap = 1 if info.get("xy_swapped", False) else 0
+        sf = info.get("sign_flipped", {}) or {}
+        fx = 1 if sf.get("x", False) else 0
+        fy = 1 if sf.get("y", False) else 0
+        key = f"swap{swap}_fx{fx}_fy{fy}"
+        return self.aug_stats[key]
 
     def pull_from_repo(
         self,
@@ -1159,8 +1235,10 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         # TODO(rcadene, aliberts): We should not perform this aggregation for datasets
         # with multiple robots of different ranges. Instead we should have one normalization
         # per robot.
-        
+
         self.stats = aggregate_stats([dataset.meta.stats for dataset in self._datasets])
+        self.aug_stats = aggregate_stats([dataset.meta.aug_stats for dataset in self._datasets])
+
         self.use_action_avg = use_action_avg
         self.window_size = window_size
         self.use_dynamic_feature = use_dynamic_feature

@@ -143,6 +143,9 @@ def train(cfg: TrainPipelineConfig):
     logging.info("Creating policy")
     if isinstance(dataset, MultiLeRobotDataset):
         ds_meta = dataset._datasets[0].meta
+        #TODO JY: 전체 데이터셋으로 하는게 맞지 않나? 체크해봐야함
+        ds_meta.stats = dataset.stats
+        ds_meta.aug_stats = dataset.aug_stats
     else:
         ds_meta = dataset.meta
     policy = make_policy(
