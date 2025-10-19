@@ -93,6 +93,7 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
         The policy is set in evaluation mode by default using `policy.eval()` (dropout modules are
         deactivated). To train it, you should first set it back in training mode with `policy.train()`.
         """
+
         if config is None:
             config = PreTrainedConfig.from_pretrained(
                 pretrained_name_or_path=pretrained_name_or_path,
