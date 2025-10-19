@@ -102,6 +102,7 @@ class DiffusionPolicy(PreTrainedPolicy):
         """
         super().__init__(config)
         config.validate_features()
+        import pdb; pdb.set_trace()
         self.config = config
         self.normalize_inputs = Normalize(config.input_features, config.normalization_mapping, dataset_stats)
         if self.config.use_dynamic_feature:
@@ -228,6 +229,8 @@ class DiffusionModel(nn.Module):
             else:
                 self.rgb_encoder = DiffusionRgbEncoder(config)
                 global_cond_dim += self.rgb_encoder.feature_dim * num_images
+
+        dynamic_cond_dim = 0
 
         if self.config.use_dynamic_feature:
             num_images = len(self.config.image_features)
