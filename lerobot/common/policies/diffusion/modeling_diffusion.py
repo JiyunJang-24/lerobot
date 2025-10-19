@@ -91,6 +91,7 @@ class DiffusionPolicy(PreTrainedPolicy):
         self,
         config: DiffusionConfig,
         dataset_stats: dict[str, dict[str, Tensor]] | None = None,
+        dataset_aug_stats: dict[str, dict[str, Tensor]] | None = None,
     ):
         """
         Args:

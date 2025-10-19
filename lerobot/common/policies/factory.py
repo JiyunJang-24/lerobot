@@ -115,7 +115,6 @@ def make_policy(
             "Please use `cpu` or `cuda` backend."
         )
     policy_cls = get_policy_class(cfg.type)
-
     kwargs = {}
     if ds_meta is not None:
         if libero_dataset:
@@ -123,6 +122,8 @@ def make_policy(
         else:
             features = dataset_to_policy_features(ds_meta.features)
         kwargs["dataset_stats"] = ds_meta.stats
+        if ds_meta.axis_augmentation or ds_meta.sign_augmentation != [False, False, False]:
+            kwargs["dataset_aug_stats"] = ds_meta.aug_stats
     else:
         if not cfg.pretrained_path:
             logging.warning(

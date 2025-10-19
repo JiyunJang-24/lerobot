@@ -139,12 +139,13 @@ def train(cfg: TrainPipelineConfig):
     if cfg.eval_freq > 0 and cfg.env is not None:
         logging.info("Creating env")
         eval_env = make_env(cfg.env, n_envs=cfg.eval.batch_size)
-
+    
     logging.info("Creating policy")
     if isinstance(dataset, MultiLeRobotDataset):
         ds_meta = dataset._datasets[0].meta
-        #TODO JY: 이건 확인해야하는데, stats를 전체로 쓰는게 더 좋은거 아닌가? 지금은 첫번째 dataset의 stats로 전체를 normalize 하는 중임
-        #ds_meta.stats = dataset.stats
+        #TODO JY: 전체 데이터셋으로 하는게 맞지 않나? 체크해봐야함
+        ds_meta.stats = dataset.stats
+        ds_meta.aug_stats = dataset.aug_stats
     else:
         ds_meta = dataset.meta
     policy = make_policy(
