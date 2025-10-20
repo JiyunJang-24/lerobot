@@ -44,6 +44,7 @@ from lerobot.common.utils.train_utils import (
     load_training_state,
     save_checkpoint,
     update_last_checkpoint,
+    save_stats,
 )
 from lerobot.common.utils.utils import (
     format_big_number,

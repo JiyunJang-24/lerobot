@@ -84,6 +84,38 @@ def update_last_checkpoint(checkpoint_dir: Path) -> Path:
     last_checkpoint_dir.symlink_to(relative_target)
 
 
+def save_stats(
+    checkpoint_dir: Path,
+    stats: dict,
+) -> None:
+    """This function creates the following directory structure:
+
+    005000/  #  training step at checkpoint
+    ├── pretrained_model/
+    │   ├── config.json  # policy config
+    │   ├── model.safetensors  # policy weights
+    │   └── train_config.json  # train config
+    └── training_state/
+        ├── optimizer_param_groups.json  #  optimizer param groups
+        ├── optimizer_state.safetensors  # optimizer state
+        ├── rng_state.safetensors  # rng states
+        ├── scheduler_state.json  # scheduler state
+        └── training_step.json  # training step
+
+    Args:
+        cfg (TrainPipelineConfig): The training config used for this run.
+        step (int): The training step at that checkpoint.
+        policy (PreTrainedPolicy): The policy to save.
+        optimizer (Optimizer | None, optional): The optimizer to save the state from. Defaults to None.
+        scheduler (LRScheduler | None, optional): The scheduler to save the state from. Defaults to None.
+    """
+    pretrained_dir = checkpoint_dir
+    # 2) stats 저장 (JSON)
+    stats_path = pretrained_dir + "/stats.json"
+    with open(stats_path, "w", encoding="utf-8") as f:
+        json.dump(_to_jsonable(stats), f, indent=2, ensure_ascii=False)
+
+
 def save_checkpoint(
     checkpoint_dir: Path,
     step: int,
