@@ -273,7 +273,7 @@ def train(cfg: TrainPipelineConfig):
             except:
                 print("ds_meta has not aug_stats")
 
-            save_checkpoint(checkpoint_dir, step, cfg, policy, optimizer, lr_scheduler, ds_meta.stats)
+            save_checkpoint(checkpoint_dir, step, cfg, policy, optimizer, ds_meta.stats, lr_scheduler)
             update_last_checkpoint(checkpoint_dir)
             if wandb_logger:
                 wandb_logger.log_policy(checkpoint_dir)
