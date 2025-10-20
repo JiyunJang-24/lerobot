@@ -157,6 +157,7 @@ class DiffusionPolicy(PreTrainedPolicy):
         actually measured from the first observation which (if `n_obs_steps` > 1) happened in the past.
         """
         batch = self.normalize_inputs(batch)
+        batch = self.normalize_targets(batch)
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch["observation.images"] = torch.stack(
