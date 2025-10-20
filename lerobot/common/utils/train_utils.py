@@ -150,7 +150,7 @@ def save_checkpoint(
     policy.save_pretrained(pretrained_dir)
     cfg.save_pretrained(pretrained_dir)
     # 2) stats 저장 (JSON)
-    stats_path = pretrained_dir + "/stats.json"
+    stats_path = pretrained_dir / "stats.json"
     with open(stats_path, "w", encoding="utf-8") as f:
         json.dump(_to_jsonable(stats), f, indent=2, ensure_ascii=False)
     save_training_state(checkpoint_dir, step, optimizer, scheduler)

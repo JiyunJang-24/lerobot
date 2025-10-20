@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 REPO_ROOT="${SCRIPT_DIR}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH}"
 
-CUDA_VISIBLE_DEVICES=3 python lerobot/scripts/train.py \
+CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
   --dataset.repo_id=[xyg_10_10_0.0_0.0/v-1.000-1.000_num1,xyg_10_10_0.0_0.0/v-1.000-1.000_num5] \
   --dataset.root=/data1/local/shortcut-learning-in-grps/dataset_git/libero_spatial_no_noops_island_1_lerobot \
   --dataset.image_transforms.enable=false \
@@ -31,7 +31,7 @@ CUDA_VISIBLE_DEVICES=3 python lerobot/scripts/train.py \
   --use_action_avg=true \
   --window_size=5 \
   --steps=90000 \
-  --save_freq=5000 \
+  --save_freq=1 \
   --batch_size=2 \
   --wandb.enable=false \
   --num_workers=0 
