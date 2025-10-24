@@ -1473,31 +1473,55 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         item["action"], augmented_info = self.augment_action_sequence(item["action"])
         item["augmented_info"] = augmented_info
         if self.use_dynamic_feature:
-            indices = random.sample(range(self._datasets[dataset_idx].num_frames-self.window_size), 3) # ensure we have enough frames for +5
-            repo_name = self.repo_ids[dataset_idx]
-            img_delta_ts = self.delta_timestamps[repo_name]["observation.image"].index(0.0)
-            act_delta_ts = self.delta_timestamps[repo_name]["action"].index(0.0)
+            # 1) 기준 아이템과 같은 angle의 데이터셋 후보 뽑기
+            ref_angle = self.indices_to_angle[dataset_idx]
+            # candidates = [
+            #     i for i in self.angle_to_indices.get(ref_angle, [])
+            #     if self._datasets[i].num_frames > self.window_size
+            # ]
+            # if not candidates:
+            #     candidates = [dataset_idx]  # 폴백
+            import pdb; pdb.set_trace()
+            candidates = self.angle_to_indices[ref_angle]
+            # 2) 후보 중에서 "데이터셋 인덱스"를 랜덤으로 3번 선택 (중복 허용)
+            #    - 중복 허용이므로 len(candidates) < 3 여도 문제 없음
+            chosen_ds_idxs = random.choices(candidates, k=3)
 
-            images = []
-            actions = []
-            for i, dynamic_start_idx in enumerate(indices):
-                dynamic_next_idx = dynamic_start_idx + self.window_size
+            images, actions, src_indices = [], [], []
+            for ds_i in chosen_ds_idxs:
+                ds = self._datasets[ds_i]
+                # 시작 프레임 랜덤 선택 (window_size 보장)
+                max_start = ds.num_frames - self.window_size
+                start = random.randrange(max_start) if max_start > 0 else 0
+                next_idx = start + self.window_size  # 이미지 비교용
 
-                ds = self._datasets[dataset_idx]
+                repo_name_i = self.repo_ids[ds_i]
+                img_delta_ts = self.delta_timestamps[repo_name_i]["observation.image"].index(0.0)
+                act_delta_ts = self.delta_timestamps[repo_name_i]["action"].index(0.0)
 
+                # 두 시점 이미지를 스택
                 img_seq = torch.stack([
-                    ds[dynamic_start_idx]["observation.image"][img_delta_ts],
-                    ds[dynamic_next_idx]["observation.image"][img_delta_ts],
+                    ds[start]["observation.image"][img_delta_ts],
+                    ds[next_idx]["observation.image"][img_delta_ts],
                 ])
                 images.append(img_seq)
-                act_seq = ds[dynamic_start_idx]["action"][act_delta_ts : act_delta_ts + self.window_size-1]
-                
+
+                # 액션 시퀀스 (평균 사용 옵션 유지)
+                act_seq = ds[start]["action"][act_delta_ts: act_delta_ts + self.window_size - 1]
                 if self.use_action_avg:
                     act_seq = torch.mean(act_seq, dim=0)
                 actions.append(act_seq)
+
+                src_indices.append(ds_i)
+
             item["dynamic.image"] = torch.stack(images)
             item["dynamic.action"] = torch.stack(actions)
-            item["dynamic.action"], dynamic_augmented_info = self.augment_action_sequence(item["dynamic.action"], info=augmented_info)
+            item["dynamic.src_dataset_indices"] = torch.tensor(src_indices)
+
+            # 기존 증강 로직 그대로
+            item["dynamic.action"], dynamic_augmented_info = self.augment_action_sequence(
+                item["dynamic.action"], info=augmented_info
+            )
             item["dynamic.augmented_info"] = dynamic_augmented_info
             
         item["dataset_index"] = torch.tensor(dataset_idx)
