@@ -74,8 +74,22 @@ from lerobot.common.datasets.video_utils import (
     get_video_info,
 )
 from lerobot.common.robot_devices.robots.utils import Robot
+import re
+from collections import defaultdict
 
+_FLOAT = r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)'
 CODEBASE_VERSION = "v2.1"
+
+def extract_angle(repo_id: str) -> float:
+    head = repo_id.split('/', 1)[0]              # 예: 'xyg_10_10_315.0_315.0'
+    m = re.search(fr'({_FLOAT})_({_FLOAT})$', head)
+    if not m:
+        raise ValueError(f"Cannot parse angle from repo_id={repo_id}")
+    a1, a2 = float(m.group(1)), float(m.group(2))
+    if abs(a1 - a2) > 1e-6:
+        print(f"[warn] angles differ: {a1} vs {a2} in {repo_id}; using {a1}")
+    # (선택) 0~360 정규화 및 키 안정화
+    return round(a1 % 360.0, 6)
 
 def _make_aug_variant_from_base(base_action_stats, swap_xy: bool, flip_x: bool, flip_y: bool):
         """
@@ -1233,6 +1247,13 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
 
         self.image_transforms = image_transforms
         self.delta_timestamps = delta_timestamps
+        self.angle_to_indices = defaultdict(list)
+        self.indices_to_angle = {}
+        for idx, repo_id in enumerate(repo_ids):
+            ang = extract_angle(repo_id)
+            self.angle_to_indices[ang].append(idx)
+            self.indices_to_angle[idx] = ang
+
         # TODO(rcadene, aliberts): We should not perform this aggregation for datasets
         # with multiple robots of different ranges. Instead we should have one normalization
         # per robot.
