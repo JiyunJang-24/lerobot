@@ -54,7 +54,8 @@ optical_backbone_cfg = {
     "num_transformer_layers":6,
     "reg_refine":None,
     "task":'flow',
-    "resume": "unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
+    "resume": "lerobot/unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
+    # "resume": "unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
     "strict_resume": False,
 }
 
@@ -134,6 +135,8 @@ class DiffusionPolicy(PreTrainedPolicy):
         self._queues = {
             "observation.state": deque(maxlen=self.config.n_obs_steps),
             "action": deque(maxlen=self.config.n_action_steps),
+            "dynamic.image":  deque(maxlen=1),
+            "dynamic.action": deque(maxlen=1)
         }
         if self.config.image_features:
             self._queues["observation.images"] = deque(maxlen=self.config.n_obs_steps)
@@ -170,6 +173,7 @@ class DiffusionPolicy(PreTrainedPolicy):
                 [batch[key] for key in self.config.image_features], dim=-4
             )
         # Note: It's important that this happens after stacking the images into a single key.
+        
         self._queues = populate_queues(self._queues, batch)
 
         if len(self._queues["action"]) == 0:
@@ -373,7 +377,6 @@ class DiffusionModel(nn.Module):
             global_cond_feats.append(img_features)
             if self.config.use_dynamic_feature:
                 # Combine batch and sequence dims while rearranging to make the camera index dimension first.
-                
                 dynamic_images = einops.rearrange(batch["dynamic.image"], "b s n ... -> s b n ...")
                 dynamic_actions = einops.rearrange(batch["dynamic.action"], "b s n ... -> s b n ...")
 
