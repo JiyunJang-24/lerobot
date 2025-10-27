@@ -172,7 +172,6 @@ def main(args):
         setup_for_distributed(args.local_rank == 0)
 
     # model
-    import pdb; pdb.set_trace()
     model = UniMatch(feature_channels=args.feature_channels,
                      num_scales=args.num_scales,
                      upsample_factor=args.upsample_factor,

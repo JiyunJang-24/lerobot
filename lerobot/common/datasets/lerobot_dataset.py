@@ -1481,7 +1481,6 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             # ]
             # if not candidates:
             #     candidates = [dataset_idx]  # 폴백
-            import pdb; pdb.set_trace()
             candidates = self.angle_to_indices[ref_angle]
             # 2) 후보 중에서 "데이터셋 인덱스"를 랜덤으로 3번 선택 (중복 허용)
             #    - 중복 허용이므로 len(candidates) < 3 여도 문제 없음

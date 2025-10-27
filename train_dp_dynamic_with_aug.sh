@@ -4,7 +4,7 @@
 # Note: You may need to log in to Weights & Biases (wandb) if enabled.
 #   --dataset.repo_id=[xyg_20_10_15.0_65.0/v-0.400-0.400_num1,xyg_20_10_15.0_65.0/v-0.600-0.600_num5] \
   # --dataset.repo_id=[xyg_10_10_0.0_0.0/v-1.000-1.000_num1,xyg_10_10_0.0_0.0/v-1.000-1.000_num5,xyg_10_10_45.0_45.0/v-1.000-1.000_num1,xyg_10_10_45.0_45.0/v-1.000-1.000_num5,xyg_10_10_90.0_90.0/v-1.000-1.000_num1,xyg_10_10_90.0_90.0/v-1.000-1.000_num5,xyg_10_10_135.0_135.0/v-1.000-1.000_num1,xyg_10_10_135.0_135.0/v-1.000-1.000_num5,xyg_10_10_225.0_225.0/v-1.000-1.000_num1,xyg_10_10_225.0_225.0/v-1.000-1.000_num5,xyg_10_10_270.0_270.0/v-1.000-1.000_num1,xyg_10_10_270.0_270.0/v-1.000-1.000_num5,xyg_10_10_315.0_315.0/v-1.000-1.000_num1,xyg_10_10_315.0_315.0/v-1.000-1.000_num5] \
-CUDA_VISIBLE_DEVICES=1 python lerobot/scripts/train.py \
+CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
   --dataset.repo_id=[xyg_10_10_0.0_0.0/v-1.000-1.000_num1,xyg_10_10_0.0_0.0/v-1.000-1.000_num5,xyg_10_10_45.0_45.0/v-1.000-1.000_num1,xyg_10_10_45.0_45.0/v-1.000-1.000_num5] \
   --dataset.root=/root/Desktop/workspace/shortcut-learning-in-grps/dataset_git/libero_spatial_no_noops_island_1_lerobot \
   --dataset.image_transforms.enable=false \
@@ -31,6 +31,6 @@ CUDA_VISIBLE_DEVICES=1 python lerobot/scripts/train.py \
   --wandb.project=libero_DP \
   --wandb.disable_artifact=true \
   --wandb.entity=DynamicVLA \
-  --job_name=Dynamic_DP_with_axis_augmented_ex1_angle_from_0_to_45
+  --job_name=Dynamic_DP_with_axis_augmented_ex1_angle_from_0_to_45_mix_dynamic_datas
 
 # Training checkpoints will be saved under: lerobot/outputs/train/202x-xx-xx/xx-xx-xx_diffusion

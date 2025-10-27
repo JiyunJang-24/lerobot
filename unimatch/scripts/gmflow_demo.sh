@@ -3,7 +3,7 @@
 
 # gmflow-scale2-regrefine6, inference on image dir
 CUDA_VISIBLE_DEVICES=0 python main_flow.py \
---inference_dir demo/flow-davis \
+--inference_dir demo/libero-demo/3-lkikjqlpzsxznnbyguwu \
 --resume pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth \
 --output_path output/gmflow-scale2-regrefine6-davis \
 --padding_factor 32 \
