@@ -430,21 +430,33 @@ class DiffusionModel(nn.Module):
             global_cond_feats.append(img_features)
             if self.config.use_dynamic_feature:
                 # Combine batch and sequence dims while rearranging to make the camera index dimension first.
-                
-                dynamic_images = einops.rearrange(batch["dynamic.image"], "b s n ... -> s b n ...") #dynamic_images.shape torch.Size([dynamic_num, batch_size, 2 (o_t, o_t+k), 3, 256, 256])
-                dynamic_actions = einops.rearrange(batch["dynamic.action"], "b s n ... -> s b n ...") #dynamic_actions.shape torch.Size([dynamic_num, batch_size, 7])
-                dynamic_features_list = torch.cat(
-                    [
-                        self.dynamic_encoder(images[:, 0], images[:, 1], actions)
-                        for images, actions in zip(dynamic_images, dynamic_actions)
-                    ]
-                )
-                # Separate batch and sequence dims back out. The camera index dim gets absorbed into the
-                # feature dim (effectively concatenating the camera features).
-                dynamic_features = einops.rearrange(
-                    dynamic_features_list, "(n b s) ... -> b s (n ...)", b=batch_size, s=self.config.num_dynamic_feature
-                )
-                #dynamic_features는 batch_size * num_dynamic_feature * feature_dim
+                # dynamic_images: [S, B, 2, 3, 256, 256]
+                # dynamic_actions: [S, B, 7]
+                dynamic_images = einops.rearrange(batch["dynamic.image"], "b s n ... -> s b n ...")
+                dynamic_actions = einops.rearrange(batch["dynamic.action"], "b s n ... -> s b n ...")
+
+                S, B, N, C, H, W = dynamic_images.shape  # N should be 2
+                assert N == 2, f"Expected 2 frames (o_t, o_t+k), got {N}"
+                import pdb; pdb.set_trace()
+                # 1) (S, B) → (S*B) 로 평탄화하여 한 번에 dynamic_encoder에 넣기
+                flat_imgs    = einops.rearrange(dynamic_images, "s b n c h w -> (s b) n c h w")   # [(S*B), 2, 3, H, W]
+                flat_actions = einops.rearrange(dynamic_actions, "s b d -> (s b) d")              # [(S*B), 7]
+
+                o_t   = flat_imgs[:, 0]  # [(S*B), 3, H, W]
+                o_tkp = flat_imgs[:, 1]  # [(S*B), 3, H, W]
+
+                # 2) 인코더 한 번 호출 (기존 zip+cat 루프 제거)
+                #    encoder 출력은 [(S*B), sfeat, f] 라고 가정 (sfeat == self.config.num_dynamic_feature)
+                flat_feats = self.dynamic_encoder(o_t, o_tkp, flat_actions)  # [(S*B), f]
+
+                # 3) 원래 순서 보존하며 (S, B, sfeat, f) 로 복원
+                feats_SB = einops.rearrange(flat_feats, "(s b) f -> s b f", s=S, b=B)
+
+                # 4) 기존 코드에서 zip over S 후 torch.cat(dim=0) 했던 결과와 동일한 축 조합으로 재구성
+                #    즉, [S*B, sfeat, f] 로 다시 펴서 'dynamic_features_list'를 만든다 (순서 동일)
+                dynamic_features = einops.rearrange(feats_SB, "s b f -> b s f", b=B, s=self.config.num_dynamic_feature)
+
+                # dynamic_features: [batch_size, num_dynamic_feature, S * f]  (카메라/특징 s 축은 유지, n=S 는 feature 차원으로 흡수)
                 global_cond_feats_dynamic.append(dynamic_features)
 
         if self.config.env_state_feature:
