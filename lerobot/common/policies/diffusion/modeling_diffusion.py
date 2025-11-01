@@ -120,9 +120,14 @@ class DiffusionPolicy(PreTrainedPolicy):
 
         self.reset()
 
-    def get_optim_params(self) -> dict:
-        #TODO JY: 여기서 train_dynamic_with_frozen_dp 이라면 self.diffusion.parameters에서 self.unet_dynamic랑 Unimatch의 projector 말고 모두 제외할 것
-        return self.diffusion.parameters()
+    def get_optim_params(self) -> dict | list[nn.Parameter]:
+        """
+        Return only trainable params.
+        - If train_dynamic_with_frozen_dp: only unet_dynamic and dynamic_encoder projector-like layers.
+        - Else: everything with requires_grad=True (freeze 된 것은 자동 제외).
+        """
+        # 기본: requires_grad=True 모두 (freeze된 모듈은 자동 제외)
+        return [p for p in self.diffusion.parameters() if p.requires_grad]
 
     def reset(self):
         """Clear observation and action queues. Should be called on `env.reset()`"""
@@ -371,17 +376,25 @@ class DiffusionModel(nn.Module):
                 
                 dynamic_images = einops.rearrange(batch["dynamic.image"], "b s n ... -> s b n ...")
                 dynamic_actions = einops.rearrange(batch["dynamic.action"], "b s n ... -> s b n ...")
-                dynamic_features_list = torch.cat(
-                    [
-                        self.dynamic_encoder(images[:, 0], images[:, 1], actions)
-                        for images, actions in zip(dynamic_images, dynamic_actions)
-                    ]
-                )
-                # Separate batch and sequence dims back out. The camera index dim gets absorbed into the
-                # feature dim (effectively concatenating the camera features).
-                dynamic_features = einops.rearrange(
-                    dynamic_features_list, "(n b s) ... -> b s (n ...)", b=batch_size, s=self.config.num_dynamic_feature
-                )
+
+                S, B, N, C, H, W = dynamic_images.shape  # N should be 2
+                # 1) (S, B) → (S*B) 로 평탄화하여 한 번에 dynamic_encoder에 넣기
+                flat_imgs    = einops.rearrange(dynamic_images, "s b n c h w -> (s b) n c h w")   # [(S*B), 2, 3, H, W]
+                flat_actions = einops.rearrange(dynamic_actions, "s b d -> (s b) d")              # [(S*B), 7]
+
+                o_t   = flat_imgs[:, 0]  # [(S*B), 3, H, W]
+                o_tkp = flat_imgs[:, 1]  # [(S*B), 3, H, W]
+
+                # 2) 인코더 한 번 호출 (기존 zip+cat 루프 제거)
+                #    encoder 출력은 [(S*B), sfeat, f] 라고 가정 (sfeat == self.config.num_dynamic_feature)
+                flat_feats = self.dynamic_encoder(o_t, o_tkp, flat_actions)  # [(S*B), f]
+
+                # 3) 원래 순서 보존하며 (S, B, sfeat, f) 로 복원
+                feats_SB = einops.rearrange(flat_feats, "(s b) f -> s b f", s=S, b=B)
+
+                # 4) 기존 코드에서 zip over S 후 torch.cat(dim=0) 했던 결과와 동일한 축 조합으로 재구성
+                #    즉, [S*B, sfeat, f] 로 다시 펴서 'dynamic_features_list'를 만든다 (순서 동일)
+                dynamic_features = einops.rearrange(feats_SB, "s b f -> b s f", b=B, s=self.config.num_dynamic_feature)
                 #dynamic_features는 batch_size * num_dynamic_feature * feature_dim
                 global_cond_feats.append(dynamic_features)
 
@@ -436,8 +449,6 @@ class DiffusionModel(nn.Module):
                 dynamic_actions = einops.rearrange(batch["dynamic.action"], "b s n ... -> s b n ...")
 
                 S, B, N, C, H, W = dynamic_images.shape  # N should be 2
-                assert N == 2, f"Expected 2 frames (o_t, o_t+k), got {N}"
-                import pdb; pdb.set_trace()
                 # 1) (S, B) → (S*B) 로 평탄화하여 한 번에 dynamic_encoder에 넣기
                 flat_imgs    = einops.rearrange(dynamic_images, "s b n c h w -> (s b) n c h w")   # [(S*B), 2, 3, H, W]
                 flat_actions = einops.rearrange(dynamic_actions, "s b d -> (s b) d")              # [(S*B), 7]
@@ -461,7 +472,6 @@ class DiffusionModel(nn.Module):
 
         if self.config.env_state_feature:
             global_cond_feats.append(batch[OBS_ENV])
-
         feats_flat = [x.contiguous().flatten(start_dim=1) for x in global_cond_feats]  # [B, T_i*D]
         out = torch.cat(feats_flat, dim=-1)  # [B, sum_i(T_i*D)]
         feats_flat_dynamic = [x.contiguous().flatten(start_dim=1) for x in global_cond_feats_dynamic]  # [B, T_i*D]
@@ -486,7 +496,7 @@ class DiffusionModel(nn.Module):
 
         # Encode image features and concatenate them all together along with the state vector.
         if self.config.train_dynamic_with_frozen_dp == True:
-            global_cond, global_cond, global_cond_dynamic = self._prepare_global_conditioning_frozen_dynamic(batch)
+            global_cond, global_cond_dynamic = self._prepare_global_conditioning_frozen_dynamic(batch)
             actions = self.conditional_sample_dynamic(batch_size, global_cond=global_cond, global_cond_dynamic=global_cond_dynamic)
         else:
             global_cond = self._prepare_global_conditioning(batch)  # (B, global_cond_dim)
@@ -639,6 +649,47 @@ class DiffusionModel(nn.Module):
 
         return loss.mean()
 
+    def freeze_rgb_and_unet(self, freeze_bn_and_dropout: bool = True) -> dict:
+        """
+        Freeze rgb_encoder and unet so they don't get updated during training.
+        Optionally put them in eval() to stop BatchNorm/Dropout updates.
+
+        Args:
+            freeze_bn_and_dropout (bool): If True, calls .eval() on modules to stop BN stats
+                                        updates and disable Dropout during forward.
+
+        Returns:
+            dict: counts of frozen parameters for each module
+                e.g., {"rgb_encoder": 12_345_678, "unet": 45_678_901, "total": 58_024_579}
+        """
+        frozen_counts = {"rgb_encoder": 0, "unet": 0, "total": 0}
+
+        def _freeze_module(m: nn.Module) -> int:
+            cnt = 0
+            for p in m.parameters():
+                if p.requires_grad:
+                    p.requires_grad = False
+                cnt += p.numel()
+            if freeze_bn_and_dropout:
+                m.eval()  # stop BN running stats & Dropout
+            return cnt
+
+        # 1) rgb_encoder (단일 or ModuleList 모두 지원)
+        if hasattr(self, "rgb_encoder") and self.rgb_encoder is not None:
+            if isinstance(self.rgb_encoder, nn.ModuleList):
+                cnt = 0
+                for enc in self.rgb_encoder:
+                    cnt += _freeze_module(enc)
+                frozen_counts["rgb_encoder"] = cnt
+            else:
+                frozen_counts["rgb_encoder"] = _freeze_module(self.rgb_encoder)
+
+        # 2) unet (주의: unet_dynamic 은 요청에 없으므로 그대로 둠)
+        if hasattr(self, "unet") and self.unet is not None:
+            frozen_counts["unet"] = _freeze_module(self.unet)
+
+        frozen_counts["total"] = frozen_counts["rgb_encoder"] + frozen_counts["unet"]
+        return frozen_counts
 
 class SpatialSoftmax(nn.Module):
     """

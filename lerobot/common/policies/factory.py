@@ -145,7 +145,6 @@ def make_policy(
         # hyperparameters that we want to vary).
         kwargs["pretrained_name_or_path"] = cfg.pretrained_path
         policy = policy_cls.from_pretrained(**kwargs)
-        #TODO JY: policy가 eval해서 들어오는데, 원래 checkpoint는 eval하고, 새로운 부분만 
         policy.train()
     else:
         # Make a fresh policy.

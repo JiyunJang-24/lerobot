@@ -156,12 +156,13 @@ def train(cfg: TrainPipelineConfig):
         ds_meta=ds_meta,
         libero_dataset=True,
     )
+    policy.diffusion.freeze_rgb_and_unet(freeze_bn_and_dropout=True)
+
     logging.info("Creating optimizer and scheduler")
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
     grad_scaler = GradScaler(device.type, enabled=cfg.policy.use_amp)
 
     step = 0  # number of policy updates (forward + backward + optim)
-
     if cfg.resume:
         step, optimizer, lr_scheduler = load_training_state(cfg.checkpoint_path, optimizer, lr_scheduler)
 
@@ -214,7 +215,7 @@ def train(cfg: TrainPipelineConfig):
         drop_last=False,
     )
     dl_iter = cycle(dataloader)
-    policy.train()
+    # policy.train()
 
     train_metrics = {
         "loss": AverageMeter("loss", ":.3f"),
