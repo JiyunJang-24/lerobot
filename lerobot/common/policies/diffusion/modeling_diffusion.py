@@ -121,6 +121,7 @@ class DiffusionPolicy(PreTrainedPolicy):
         self.reset()
 
     def get_optim_params(self) -> dict:
+        #TODO JY: 여기서 train_dynamic_with_frozen_dp 이라면 self.diffusion.parameters에서 self.unet_dynamic랑 Unimatch의 projector 말고 모두 제외할 것
         return self.diffusion.parameters()
 
     def reset(self):
@@ -192,8 +193,11 @@ class DiffusionPolicy(PreTrainedPolicy):
             )
         if self.config.use_normalize_for_action:
             batch = self.normalize_targets(batch)
-        
-        loss = self.diffusion.compute_loss(batch)
+
+        if self.config.train_dynamic_with_frozen_dp:
+            loss = self.diffusion.compute_loss_dynamic(batch)
+        else:
+            loss = self.diffusion.compute_loss(batch)
 
         # no output_dict so returning None
         return loss, None
@@ -243,7 +247,11 @@ class DiffusionModel(nn.Module):
         if self.config.env_state_feature:
             global_cond_dim += self.config.env_state_feature.shape[0]
 
-        self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim) 
+        if self.config.train_dynamic_with_frozen_dp:
+            self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps)
+            self.unet_dynamic = DiffusionConditionalUnet1d(config, global_cond_dim=dynamic_cond_dim) 
+        else:
+            self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim)
 
         self.noise_scheduler = _make_noise_scheduler(
             config.noise_scheduler_type,
@@ -287,6 +295,40 @@ class DiffusionModel(nn.Module):
             )
             # Compute previous image: x_t -> x_t-1
             sample = self.noise_scheduler.step(model_output, t, sample, generator=generator).prev_sample
+
+        return sample
+
+    # ========= inference  ============
+    def conditional_sample_dynamic(
+        self, batch_size: int, global_cond: Tensor | None = None, global_cond_dynamic: Tensor | None = None, generator: torch.Generator | None = None
+    ) -> Tensor:
+        device = get_device_from_parameters(self)
+        dtype = get_dtype_from_parameters(self)
+
+        # Sample prior.
+        sample = torch.randn(
+            size=(batch_size, self.config.horizon, self.config.action_feature.shape[0]),
+            dtype=dtype,
+            device=device,
+            generator=generator,
+        )
+
+        self.noise_scheduler.set_timesteps(self.num_inference_steps)
+
+        for t in self.noise_scheduler.timesteps:
+            # Predict model output.
+            model_output = self.unet(
+                sample,
+                torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device),
+                global_cond=global_cond,
+            )
+            output = self.unet_dynamic(
+                model_output,
+                torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device),
+                global_cond=global_cond_dynamic,
+            )
+            # Compute previous image: x_t -> x_t-1
+            sample = self.noise_scheduler.step(output, t, sample, generator=generator).prev_sample
 
         return sample
 
@@ -350,7 +392,72 @@ class DiffusionModel(nn.Module):
         out = torch.cat(feats_flat, dim=-1)  # [B, sum_i(T_i*D)]
         # Concatenate features then flatten to (B, global_cond_dim).
         return out
+    
+    def _prepare_global_conditioning_frozen_dynamic(self, batch: dict[str, Tensor]) -> Tensor:
+        """Encode image features and concatenate them all together along with the state vector."""
+        batch_size, n_obs_steps = batch[OBS_ROBOT].shape[:2]
+        global_cond_feats = []
+        global_cond_feats_dynamic = []
+        if self.config.use_robot_state:
+            global_cond_feats.append(batch[OBS_ROBOT])
+        # Extract image features.
+        if self.config.image_features:
+            if self.config.use_separate_rgb_encoder_per_camera:
+                # Combine batch and sequence dims while rearranging to make the camera index dimension first.
+                images_per_camera = einops.rearrange(batch["observation.images"], "b s n ... -> n (b s) ...")
+                img_features_list = torch.cat(
+                    [
+                        encoder(images)
+                        for encoder, images in zip(self.rgb_encoder, images_per_camera, strict=True)
+                    ]
+                )
+                # Separate batch and sequence dims back out. The camera index dim gets absorbed into the
+                # feature dim (effectively concatenating the camera features).
+                img_features = einops.rearrange(
+                    img_features_list, "(n b s) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
+                )
+            else:
+                # Combine batch, sequence, and "which camera" dims before passing to shared encoder.
+                img_features = self.rgb_encoder(
+                    einops.rearrange(batch["observation.images"], "b s n ... -> (b s n) ...")
+                )
+                # Separate batch dim and sequence dim back out. The camera index dim gets absorbed into the
+                # feature dim (effectively concatenating the camera features).
+                img_features = einops.rearrange(
+                    img_features, "(b s n) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
+                )
+            #img_features는 batch_size * n_obs_steps * feature_dim
+            global_cond_feats.append(img_features)
+            if self.config.use_dynamic_feature:
+                # Combine batch and sequence dims while rearranging to make the camera index dimension first.
+                
+                dynamic_images = einops.rearrange(batch["dynamic.image"], "b s n ... -> s b n ...") #dynamic_images.shape torch.Size([dynamic_num, batch_size, 2 (o_t, o_t+k), 3, 256, 256])
+                dynamic_actions = einops.rearrange(batch["dynamic.action"], "b s n ... -> s b n ...") #dynamic_actions.shape torch.Size([dynamic_num, batch_size, 7])
+                dynamic_features_list = torch.cat(
+                    [
+                        self.dynamic_encoder(images[:, 0], images[:, 1], actions)
+                        for images, actions in zip(dynamic_images, dynamic_actions)
+                    ]
+                )
+                # Separate batch and sequence dims back out. The camera index dim gets absorbed into the
+                # feature dim (effectively concatenating the camera features).
+                dynamic_features = einops.rearrange(
+                    dynamic_features_list, "(n b s) ... -> b s (n ...)", b=batch_size, s=self.config.num_dynamic_feature
+                )
+                #dynamic_features는 batch_size * num_dynamic_feature * feature_dim
+                global_cond_feats_dynamic.append(dynamic_features)
 
+        if self.config.env_state_feature:
+            global_cond_feats.append(batch[OBS_ENV])
+
+        feats_flat = [x.contiguous().flatten(start_dim=1) for x in global_cond_feats]  # [B, T_i*D]
+        out = torch.cat(feats_flat, dim=-1)  # [B, sum_i(T_i*D)]
+        feats_flat_dynamic = [x.contiguous().flatten(start_dim=1) for x in global_cond_feats_dynamic]  # [B, T_i*D]
+        out_dynamic = torch.cat(feats_flat_dynamic, dim=-1)  # [B, sum_i(T_i*D)]
+
+        # Concatenate features then flatten to (B, global_cond_dim).
+        return out, out_dynamic
+    
     def generate_actions(self, batch: dict[str, Tensor]) -> Tensor:
         """
         This function expects `batch` to have:
@@ -366,10 +473,14 @@ class DiffusionModel(nn.Module):
         assert n_obs_steps == self.config.n_obs_steps
 
         # Encode image features and concatenate them all together along with the state vector.
-        global_cond = self._prepare_global_conditioning(batch)  # (B, global_cond_dim)
-
-        # run sampling
-        actions = self.conditional_sample(batch_size, global_cond=global_cond)
+        if self.config.train_dynamic_with_frozen_dp == True:
+            global_cond, global_cond, global_cond_dynamic = self._prepare_global_conditioning_frozen_dynamic(batch)
+            actions = self.conditional_sample_dynamic(batch_size, global_cond=global_cond, global_cond_dynamic=global_cond_dynamic)
+        else:
+            global_cond = self._prepare_global_conditioning(batch)  # (B, global_cond_dim)
+            # run sampling
+            actions = self.conditional_sample(batch_size, global_cond=global_cond)
+        
 
         # Extract `n_action_steps` steps worth of actions (from the current observation).
         start = n_obs_steps - 1
@@ -420,6 +531,79 @@ class DiffusionModel(nn.Module):
         # Run the denoising network (that might denoise the trajectory, or attempt to predict the noise).
         pred = self.unet(noisy_trajectory, timesteps, global_cond=global_cond)
 
+        # Compute the loss.
+        # The target is either the original trajectory, or the noise.
+        if self.config.prediction_type == "epsilon":
+            target = eps
+        elif self.config.prediction_type == "sample":
+            target = batch["action"]
+        else:
+            raise ValueError(f"Unsupported prediction type {self.config.prediction_type}")
+
+        loss = F.mse_loss(pred, target, reduction="none")
+
+        # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
+        if self.config.do_mask_loss_for_padding:
+            if "action_is_pad" not in batch:
+                raise ValueError(
+                    "You need to provide 'action_is_pad' in the batch when "
+                    f"{self.config.do_mask_loss_for_padding=}."
+                )
+            in_episode_bound = ~batch["action_is_pad"]
+            loss = loss * in_episode_bound.unsqueeze(-1)
+
+        return loss.mean()
+    
+    def compute_loss_dynamic(self, batch: dict[str, Tensor]) -> Tensor:
+        """
+        This function expects `batch` to have (at least):
+        {
+            "observation.state": (B, n_obs_steps, state_dim)
+
+            "observation.images": (B, n_obs_steps, num_cameras, C, H, W)
+                AND/OR
+            "observation.environment_state": (B, environment_dim)
+
+            "action": (B, horizon, action_dim)
+            "action_is_pad": (B, horizon)
+        }
+        """
+        # Input validation.
+        assert set(batch).issuperset({"observation.state", "action", "action_is_pad"})
+        assert "observation.images" in batch or "observation.environment_state" in batch
+        n_obs_steps = batch["observation.state"].shape[1]
+        horizon = batch["action"].shape[1]
+        assert horizon == self.config.horizon
+        assert n_obs_steps == self.config.n_obs_steps
+
+        # Encode image features and concatenate them all together along with the state vector.
+        global_cond, global_cond_dynamic = self._prepare_global_conditioning_frozen_dynamic(batch)  # (B, global_cond_dim)
+
+        # Forward diffusion.
+        trajectory = batch["action"]
+        # Sample noise to add to the trajectory.
+        eps = torch.randn(trajectory.shape, device=trajectory.device)
+        # Sample a random noising timestep for each item in the batch.
+        timesteps = torch.randint(
+            low=0,
+            high=self.noise_scheduler.config.num_train_timesteps,
+            size=(trajectory.shape[0],),
+            device=trajectory.device,
+        ).long()
+        # Add noise to the clean trajectories according to the noise magnitude at each timestep.
+        noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
+
+        # Run the denoising network (that might denoise the trajectory, or attempt to predict the noise).
+        pred = self.unet(noisy_trajectory, timesteps, global_cond=global_cond)
+
+        # Sample noise to add to the trajectory.
+        # Sample a random noising timestep for each item in the batch.
+        # Add noise to the clean trajectories according to the noise magnitude at each timestep.
+        #TODO JY: eps, timesteps를 위에서 썼던걸 그대로 쓰는게 맞을지 확인
+        noisy_trajectory = self.noise_scheduler.add_noise(pred, eps, timesteps)
+
+        # Run the denoising network (that might denoise the trajectory, or attempt to predict the noise).
+        pred = self.unet_dynamic(noisy_trajectory, timesteps, global_cond=global_cond_dynamic)
         # Compute the loss.
         # The target is either the original trajectory, or the noise.
         if self.config.prediction_type == "epsilon":

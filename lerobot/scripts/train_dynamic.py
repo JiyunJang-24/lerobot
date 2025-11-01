@@ -115,6 +115,8 @@ def update_policy(
 @parser.wrap()
 def train(cfg: TrainPipelineConfig):    
     cfg.validate()
+    cfg.policy.pretrained_path = cfg.pretrained_path
+
     logging.info(pformat(cfg.to_dict()))
 
     if cfg.wandb.enable and cfg.wandb.project:
