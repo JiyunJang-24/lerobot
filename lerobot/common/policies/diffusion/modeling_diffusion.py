@@ -54,8 +54,8 @@ optical_backbone_cfg = {
     "num_transformer_layers":6,
     "reg_refine":None,
     "task":'flow',
-    "resume": "lerobot/unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
-    # "resume": "unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
+    # "resume": "lerobot/unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
+    "resume": "unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
     "strict_resume": False,
 }
 
@@ -258,7 +258,7 @@ class DiffusionModel(nn.Module):
 
         if self.config.train_dynamic_with_frozen_dp:
             self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps)
-            self.unet_dynamic = DiffusionConditionalUnet1d(config, global_cond_dim=dynamic_cond_dim) 
+            self.unet_dynamic = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim) 
         else:
             self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim)
 
@@ -447,6 +447,7 @@ class DiffusionModel(nn.Module):
                 )
             #img_features는 batch_size * n_obs_steps * feature_dim
             global_cond_feats.append(img_features)
+            global_cond_feats_dynamic.append(img_features)
             if self.config.use_dynamic_feature:
                 # Combine batch and sequence dims while rearranging to make the camera index dimension first.
                 # dynamic_images: [S, B, 2, 3, 256, 256]
