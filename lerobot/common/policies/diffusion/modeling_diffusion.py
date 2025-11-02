@@ -326,16 +326,17 @@ class DiffusionModel(nn.Module):
 
         for t in self.noise_scheduler.timesteps:
             # Predict model output.
-            model_output = self.unet(
+            base_model_output = self.unet(
                 sample,
                 torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device),
                 global_cond=global_cond,
             )
-            output = self.unet_dynamic(
-                model_output,
+            dynamic_output = self.unet_dynamic(
+                sample,
                 torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device),
                 global_cond=global_cond_dynamic,
             )
+            output = base_model_output + dynamic_output
             # Compute previous image: x_t -> x_t-1
             sample = self.noise_scheduler.step(output, t, sample, generator=generator).prev_sample
 
@@ -586,7 +587,7 @@ class DiffusionModel(nn.Module):
 
         return loss.mean()
     
-    def compute_loss_dynamic(self, batch: dict[str, Tensor]) -> Tensor:
+    def compute_loss_dynamic_one_more_noise(self, batch: dict[str, Tensor]) -> Tensor:
         """
         This function expects `batch` to have (at least):
         {
@@ -648,6 +649,69 @@ class DiffusionModel(nn.Module):
         loss = F.mse_loss(pred, target, reduction="none")
 
         # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
+        if self.config.do_mask_loss_for_padding:
+            if "action_is_pad" not in batch:
+                raise ValueError(
+                    "You need to provide 'action_is_pad' in the batch when "
+                    f"{self.config.do_mask_loss_for_padding=}."
+                )
+            in_episode_bound = ~batch["action_is_pad"]
+            loss = loss * in_episode_bound.unsqueeze(-1)
+
+        return loss.mean()
+
+    def compute_loss_dynamic(self, batch: dict[str, Tensor]) -> Tensor:
+        assert set(batch).issuperset({"observation.state", "action", "action_is_pad"})
+        assert "observation.images" in batch or "observation.environment_state" in batch
+        n_obs_steps = batch["observation.state"].shape[1]
+        horizon = batch["action"].shape[1]
+        assert horizon == self.config.horizon
+        assert n_obs_steps == self.config.n_obs_steps
+
+        # 준비: cond (base/dynamic), base는 freeze 전제
+        global_cond, global_cond_dynamic = self._prepare_global_conditioning_frozen_dynamic(batch)
+
+        x0 = batch["action"]                                # (B, H, A)
+        eps = torch.randn_like(x0)
+        timesteps = torch.randint(
+            low=0,
+            high=self.noise_scheduler.config.num_train_timesteps,
+            size=(x0.shape[0],),
+            device=x0.device,
+        ).long()
+
+        # 1) 한 번만 forward diffusion: x_t
+        x_t = self.noise_scheduler.add_noise(x0, eps, timesteps)
+
+        # 2) base 출력 (gradient 차단)
+        with torch.no_grad():
+            base_out = self.unet(x_t, timesteps, global_cond=global_cond)
+            # base가 epsilon/x0/v 중 뭘 내는지에 따라 분기 필요
+            base_mode = self.config.prediction_type  # base/dynamic 동일 가정
+            # 만약 base가 다른 모드면, 아래에서 변환 함수로 맞춰주면 됩니다.
+
+        # 3) dynamic 보정량 (같은 입력 x_t, 같은 t)
+        dyn_out = self.unet_dynamic(x_t, timesteps, global_cond=global_cond_dynamic)
+
+        # 4) 타깃/결합 방식
+        pred_type = self.config.prediction_type
+        if pred_type == "epsilon":
+            # 최종 ε̂ = ε_base + Δε
+            pred = base_out.detach() + dyn_out
+            target = eps
+        elif pred_type == "sample":  # x0 파라미터화
+            pred = base_out.detach() + dyn_out
+            target = x0
+        else:
+            raise ValueError(f"Unsupported prediction type {pred_type}")
+
+        loss = F.mse_loss(pred, target, reduction="none")
+
+        # (선택) 보정량 크기 regularization: Δ를 불필요하게 크게 만들지 않도록
+        if getattr(self.config, "lambda_residual_l2", 0.0) > 0:
+            loss = loss + self.config.lambda_residual_l2 * (dyn_out ** 2)
+
+        # 패딩 마스킹
         if self.config.do_mask_loss_for_padding:
             if "action_is_pad" not in batch:
                 raise ValueError(
