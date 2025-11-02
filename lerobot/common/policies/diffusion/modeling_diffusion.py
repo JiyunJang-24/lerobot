@@ -54,12 +54,12 @@ optical_backbone_cfg = {
     "num_transformer_layers":6,
     "reg_refine":None,
     "task":'flow',
-    # "resume": "lerobot/unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
-    "resume": "unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
+    "resume_eval": "lerobot/unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
+    "resume_train": "unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
     "strict_resume": False,
 }
 
-def load_optical_backbone(device):
+def load_optical_backbone(device, evaluation):
     #define optical backbone class
     backbone_model = UniMatch(feature_channels=optical_backbone_cfg["feature_channels"],
                     num_scales=optical_backbone_cfg["num_scales"],
@@ -70,7 +70,11 @@ def load_optical_backbone(device):
                     reg_refine=optical_backbone_cfg["reg_refine"],
                     task=optical_backbone_cfg["task"],
                     ).to(device)
-
+    if evaluation==False:
+        optical_backbone_cfg["resume"] = optical_backbone_cfg["resume_train"]
+    else:
+        optical_backbone_cfg["resume"] = optical_backbone_cfg["resume_eval"]
+        
     if optical_backbone_cfg["resume"]:
         print('Load checkpoint: %s' % optical_backbone_cfg["resume"])
         checkpoint = torch.load(optical_backbone_cfg["resume"])
@@ -93,6 +97,7 @@ class DiffusionPolicy(PreTrainedPolicy):
         config: DiffusionConfig,
         dataset_stats: dict[str, dict[str, Tensor]] | None = None,
         dataset_aug_stats: dict[str, dict[str, Tensor]] | None = None,
+        evaluation = False,
     ):
         """
         Args:
@@ -116,7 +121,7 @@ class DiffusionPolicy(PreTrainedPolicy):
         )
         # queues are populated during rollout of the policy, they contain the n latest observations and actions
         self._queues = None
-
+        self.config.evaluation = evaluation
         self.diffusion = DiffusionModel(config)
 
         self.reset()
@@ -249,7 +254,7 @@ class DiffusionModel(nn.Module):
 
         if self.config.use_dynamic_feature:
             num_images = len(self.config.image_features)
-            self.dynamic_encoder = load_optical_backbone(get_device_from_parameters(self))
+            self.dynamic_encoder = load_optical_backbone(get_device_from_parameters(self), evaluation=self.config.evaluation)
 
             dynamic_cond_dim = self.dynamic_encoder.feature_dim * num_images * self.config.num_dynamic_feature
 
