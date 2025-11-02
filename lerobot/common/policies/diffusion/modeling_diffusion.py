@@ -377,6 +377,9 @@ class DiffusionModel(nn.Module):
             global_cond_feats.append(img_features)
             if self.config.use_dynamic_feature:
                 # Combine batch and sequence dims while rearranging to make the camera index dimension first.
+                if batch["dynamic.image"].ndim == 7:
+                    batch["dynamic.image"] = batch["dynamic.image"].squeeze(0)
+                    batch["dynamic.action"] = batch["dynamic.action"].squeeze(0)
                 dynamic_images = einops.rearrange(batch["dynamic.image"], "b s n ... -> s b n ...")
                 dynamic_actions = einops.rearrange(batch["dynamic.action"], "b s n ... -> s b n ...")
 
@@ -448,6 +451,9 @@ class DiffusionModel(nn.Module):
                 # Combine batch and sequence dims while rearranging to make the camera index dimension first.
                 # dynamic_images: [S, B, 2, 3, 256, 256]
                 # dynamic_actions: [S, B, 7]
+                if batch["dynamic.image"].ndim == 7:
+                    batch["dynamic.image"] = batch["dynamic.image"].squeeze(0)
+                    batch["dynamic.action"] = batch["dynamic.action"].squeeze(0)
                 dynamic_images = einops.rearrange(batch["dynamic.image"], "b s n ... -> s b n ...")
                 dynamic_actions = einops.rearrange(batch["dynamic.action"], "b s n ... -> s b n ...")
 
