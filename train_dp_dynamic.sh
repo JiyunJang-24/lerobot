@@ -20,6 +20,7 @@ CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
   --policy.xyg_resize_shape=[84,84] \
   --policy.use_dynamic_feature=true \
   --policy.num_dynamic_feature=3 \
+  --policy.use_dynamic_common_feature=true \
   --use_action_avg=true \
   --window_size=5 \
   --steps=90000 \

@@ -121,9 +121,9 @@ class FlowActionAdapterAttn(nn.Module):
       - action_emb_64: (B, 64)
       - cond_64: (B, 64)      # 액션을 쿼리로 flow_tokens를 한번 더 집약한 결과
     """
-    def __init__(self, in_ch=256, action_dim=7, out_dim=64, mid_dim=128, num_queries=4, heads=4):
+    def __init__(self, in_ch=256, action_dim=7, out_dim=64, mid_dim=128, num_queries=4, heads=4, use_dynamic_common_feature=False, num_dynamic_feature=3):
         super().__init__()
-        self.group_size = 3
+        self.group_size = num_dynamic_feature
 
         triplet_mlp_ratio=2.0
         self.attnpool = AttnPool2d(in_ch=in_ch, out_dim=out_dim, num_queries=num_queries, heads=heads)
@@ -141,7 +141,9 @@ class FlowActionAdapterAttn(nn.Module):
             nn.GELU(),
             nn.Linear(2*out_dim, out_dim),
         )
-        self.triplet_encoder = TinyTokenEncoder(dim=out_dim, heads=heads, mlp_ratio=triplet_mlp_ratio)
+        self.use_dynamic_common_feature=use_dynamic_common_feature, 
+        if self.use_dynamic_common_feature:
+            self.triplet_encoder = TinyTokenEncoder(dim=out_dim, heads=heads, mlp_ratio=triplet_mlp_ratio)
 
 
     def forward(self, x_cat: torch.Tensor, action: torch.Tensor):
@@ -158,32 +160,34 @@ class FlowActionAdapterAttn(nn.Module):
         fused = fused + self.cross_ffn(fused)     # (B,1,64)
         cond_64 = fused.squeeze(1)                # (B,64)
         # 4) (B, 64) -> (G, 3, 64)로 reshape 후, triplet feature extraction
-        B = cond_64.size(0)
-        gs = self.group_size
-        if B % gs != 0:
-            # 남는 샘플은 잘라내거나(아래) 패딩하도록 바꿔도 됨
-            print("Dimension Error!!")
-            trim = B - (B // gs) * gs
-            if trim > 0:
-                cond_64 = cond_64[:-trim]
-                flow_tokens = flow_tokens[:-trim]
-                flow_emb_64 = flow_emb_64[:-trim]
-                action_emb = action_emb[:-trim]
+        if self.use_dynamic_common_feature:
             B = cond_64.size(0)
+            gs = self.group_size
+            if B % gs != 0:
+                # 남는 샘플은 잘라내거나(아래) 패딩하도록 바꿔도 됨
+                print("Dimension Error!!")
+                trim = B - (B // gs) * gs
+                if trim > 0:
+                    cond_64 = cond_64[:-trim]
+                    flow_tokens = flow_tokens[:-trim]
+                    flow_emb_64 = flow_emb_64[:-trim]
+                    action_emb = action_emb[:-trim]
+                B = cond_64.size(0)
 
-        G = B // gs
-        cond_triplet = cond_64.view(G, gs, -1)        # (G, 3, 64)
+            G = B // gs
+            cond_triplet = cond_64.view(G, gs, -1)        # (G, 3, 64)
 
-        # 5) (3,64) 시퀀스에 대해 self-attention 인코딩
-        cond_triplet_tokens = self.triplet_encoder(cond_triplet)  # (G, 3, 64)
+            # 5) (3,64) 시퀀스에 대해 self-attention 인코딩
+            cond_triplet_tokens = self.triplet_encoder(cond_triplet)  # (G, 3, 64)
 
-        # 6) 집계(평균 or 첫 토큰 사용 가능)
-        cond_triplet_emb = cond_triplet_tokens.mean(dim=1)        # (G, 64)
+            # 6) 집계(평균 or 첫 토큰 사용 가능)
+            cond_64 = cond_triplet_tokens.mean(dim=1)        # (G, 64)
+            
         return {
             "flow_tokens": flow_tokens,     # (B,K,64) — 정보 보존 ↑
             "flow_emb_64": flow_emb_64,     # (B,64)
             "action_emb_64": action_emb,    # (B,64)
-            "cond_64": cond_triplet_emb,             # (G,64)  ← 최종 컨디션
+            "cond_64": cond_64,             # (G,64)  ← 최종 컨디션
         }
 
 
@@ -237,7 +241,7 @@ class Flow2LLaMAAdapter(nn.Module):
         return x   # (B,144,4096)
 
 class UniMatchVisionBackbone(nn.Module):
-    def __init__(self, base_unimatch: nn.Module, fuse_multiscale: bool = False):
+    def __init__(self, base_unimatch: nn.Module, fuse_multiscale: bool = False, use_dynamic_common_feature: bool = False, num_dynamic_feature: int = 3):
         super().__init__()
         self.optical_backbone = base_unimatch.backbone
         self.optical_transformer = base_unimatch.transformer
@@ -247,6 +251,8 @@ class UniMatchVisionBackbone(nn.Module):
         self.attn_type = "swin"
         self.attn_splits_list = [2, 8]
         self.feature_dim = 64
+        self.use_dynamic_common_feature=use_dynamic_common_feature
+        self.num_dynamic_feature=num_dynamic_feature
         # x0_last (128) || x1_last (128) -> 256 입력을 받아 12x12 토큰(144개) * 4096 임베딩으로
         self.optical_llama_adapter = Flow2LLaMAAdapter(in_ch=self.feature_channels*2,
                                                mid_ch1=384, mid_ch2=512,
@@ -257,7 +263,10 @@ class UniMatchVisionBackbone(nn.Module):
             in_ch=self.feature_channels * 2,  # 128*2=256
             action_dim=7,
             out_dim=self.feature_dim,
-            mid_dim=self.feature_dim*2
+            mid_dim=self.feature_dim*2,
+            use_dynamic_common_feature=self.use_dynamic_common_feature,
+            num_dynamic_feature=self.num_dynamic_feature,
+
         )
         self._freeze_all_except_flow_action()
 

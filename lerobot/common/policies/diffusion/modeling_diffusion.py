@@ -59,7 +59,7 @@ optical_backbone_cfg = {
     "strict_resume": False,
 }
 
-def load_optical_backbone(device, evaluation):
+def load_optical_backbone(device, evaluation, use_dynamic_common_feature=False, num_dynamic_feature=3):
     #define optical backbone class
     backbone_model = UniMatch(feature_channels=optical_backbone_cfg["feature_channels"],
                     num_scales=optical_backbone_cfg["num_scales"],
@@ -79,7 +79,7 @@ def load_optical_backbone(device, evaluation):
         print('Load checkpoint: %s' % optical_backbone_cfg["resume"])
         checkpoint = torch.load(optical_backbone_cfg["resume"])
         backbone_model.load_state_dict(checkpoint['model'], strict=optical_backbone_cfg["strict_resume"])
-    backbone_projector_model = UniMatchVisionBackbone(base_unimatch=backbone_model, fuse_multiscale=False)
+    backbone_projector_model = UniMatchVisionBackbone(base_unimatch=backbone_model, fuse_multiscale=False, use_dynamic_common_feature=use_dynamic_common_feature, num_dynamic_feature=num_dynamic_feature)
 
     return backbone_projector_model
 
@@ -254,9 +254,14 @@ class DiffusionModel(nn.Module):
 
         if self.config.use_dynamic_feature:
             num_images = len(self.config.image_features)
-            self.dynamic_encoder = load_optical_backbone(get_device_from_parameters(self), evaluation=self.config.evaluation)
-
-            dynamic_cond_dim = self.dynamic_encoder.feature_dim
+            self.dynamic_encoder = load_optical_backbone(get_device_from_parameters(self), 
+                                                        evaluation=self.config.evaluation, 
+                                                        use_dynamic_common_feature=self.config.use_dynamic_common_feature,
+                                                        num_dynamic_feature=self.config.num_dynamic_feature)
+            if self.config.use_dynamic_common_feature:
+                dynamic_cond_dim = self.dynamic_encoder.feature_dim * self.config.num_dynamic_feature
+            else:
+                dynamic_cond_dim = self.dynamic_encoder.feature_dim
 
         if self.config.env_state_feature:
             global_cond_dim += self.config.env_state_feature.shape[0]
@@ -398,7 +403,16 @@ class DiffusionModel(nn.Module):
                 o_tkp = flat_imgs[:, 1]  # [(S*B), 3, H, W]
                 # 2) 인코더 한 번 호출 (기존 zip+cat 루프 제거)
                 #    encoder 출력은 [(S*B), sfeat, f] 라고 가정 (sfeat == self.config.num_dynamic_feature)
-                flat_feats = self.dynamic_encoder(o_t, o_tkp, flat_actions)  # [(B), f]
+                flat_feats = self.dynamic_encoder(o_t, o_tkp, flat_actions)  # [(S*B), f]
+                if self.config.use_dynamic_common_feature:
+                    dynamic_features = flat_feats #[B, f]
+                else:
+                    # 3) 원래 순서 보존하며 (S, B, sfeat, f) 로 복원
+                    feats_SB = einops.rearrange(flat_feats, "(s b) f -> s b f", s=S, b=B)
+
+                    # 4) 기존 코드에서 zip over S 후 torch.cat(dim=0) 했던 결과와 동일한 축 조합으로 재구성
+                    #    즉, [S*B, sfeat, f] 로 다시 펴서 'dynamic_features_list'를 만든다 (순서 동일)
+                    dynamic_features = einops.rearrange(feats_SB, "s b f -> b s f", b=B, s=self.config.num_dynamic_feature)
 
                 # 3) 원래 순서 보존하며 (S, B, sfeat, f) 로 복원
                 # feats_SB = einops.rearrange(flat_feats, "(s b) f -> s b f", s=S, b=B)
@@ -475,13 +489,15 @@ class DiffusionModel(nn.Module):
                 # 2) 인코더 한 번 호출 (기존 zip+cat 루프 제거)
                 #    encoder 출력은 [(S*B), sfeat, f] 라고 가정 (sfeat == self.config.num_dynamic_feature)
                 flat_feats = self.dynamic_encoder(o_t, o_tkp, flat_actions)  # [(S*B), f]
+                if self.config.use_dynamic_common_feature:
+                    dynamic_features = flat_feats
+                else:
+                    # 3) 원래 순서 보존하며 (S, B, sfeat, f) 로 복원
+                    feats_SB = einops.rearrange(flat_feats, "(s b) f -> s b f", s=S, b=B)
 
-                # 3) 원래 순서 보존하며 (S, B, sfeat, f) 로 복원
-                feats_SB = einops.rearrange(flat_feats, "(s b) f -> s b f", s=S, b=B)
-
-                # 4) 기존 코드에서 zip over S 후 torch.cat(dim=0) 했던 결과와 동일한 축 조합으로 재구성
-                #    즉, [S*B, sfeat, f] 로 다시 펴서 'dynamic_features_list'를 만든다 (순서 동일)
-                dynamic_features = einops.rearrange(feats_SB, "s b f -> b s f", b=B, s=self.config.num_dynamic_feature)
+                    # 4) 기존 코드에서 zip over S 후 torch.cat(dim=0) 했던 결과와 동일한 축 조합으로 재구성
+                    #    즉, [S*B, sfeat, f] 로 다시 펴서 'dynamic_features_list'를 만든다 (순서 동일)
+                    dynamic_features = einops.rearrange(feats_SB, "s b f -> b s f", b=B, s=self.config.num_dynamic_feature)
 
                 # dynamic_features: [batch_size, num_dynamic_feature, S * f]  (카메라/특징 s 축은 유지, n=S 는 feature 차원으로 흡수)
                 global_cond_feats_dynamic.append(dynamic_features)
