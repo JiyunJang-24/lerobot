@@ -24,13 +24,13 @@ CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
   --policy.use_language=true \
   --use_action_avg=true \
   --window_size=5 \
-  --steps=60000 \
+  --steps=100000 \
   --save_freq=5000 \
-  --batch_size=64 \
+  --batch_size=48 \
   --wandb.enable=true \
   --wandb.project=libero_DP \
   --wandb.disable_artifact=true \
   --wandb.entity=DynamicVLA \
-  --job_name=Dynamic_DP_ex1_angle_from_0_45_315
+  --job_name=Dynamic_DP_ex1_angle_from_0_45_315_use_language
 
 # Training checkpoints will be saved under: lerobot/outputs/train/202x-xx-xx/xx-xx-xx_diffusion

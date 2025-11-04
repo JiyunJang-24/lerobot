@@ -5,7 +5,7 @@
 #   --dataset.repo_id=[xyg_20_10_15.0_65.0/v-0.400-0.400_num1,xyg_20_10_15.0_65.0/v-0.600-0.600_num5] \
   # --dataset.repo_id=[xyg_10_10_0.0_0.0/v-1.000-1.000_num1,xyg_10_10_0.0_0.0/v-1.000-1.000_num5,xyg_10_10_45.0_45.0/v-1.000-1.000_num1,xyg_10_10_45.0_45.0/v-1.000-1.000_num5,xyg_10_10_90.0_90.0/v-1.000-1.000_num1,xyg_10_10_90.0_90.0/v-1.000-1.000_num5,xyg_10_10_135.0_135.0/v-1.000-1.000_num1,xyg_10_10_135.0_135.0/v-1.000-1.000_num5,xyg_10_10_225.0_225.0/v-1.000-1.000_num1,xyg_10_10_225.0_225.0/v-1.000-1.000_num5,xyg_10_10_270.0_270.0/v-1.000-1.000_num1,xyg_10_10_270.0_270.0/v-1.000-1.000_num5,xyg_10_10_315.0_315.0/v-1.000-1.000_num1,xyg_10_10_315.0_315.0/v-1.000-1.000_num5] \
 
-CUDA_VISIBLE_DEVICES=3 python lerobot/scripts/train.py \
+CUDA_VISIBLE_DEVICES=2 python lerobot/scripts/train.py \
   --dataset.repo_id=[xyg_10_10_0.0_0.0/v-1.000-1.000_num1,xyg_10_10_0.0_0.0/v-1.000-1.000_num5,xyg_10_10_45.0_45.0/v-1.000-1.000_num1,xyg_10_10_45.0_45.0/v-1.000-1.000_num5,xyg_10_10_315.0_315.0/v-1.000-1.000_num1,xyg_10_10_315.0_315.0/v-1.000-1.000_num5] \
   --dataset.root=/data1/local/shortcut-learning-in-grps/dataset_git/libero_spatial_no_noops_island_1_lerobot \
   --dataset.image_transforms.enable=false \
@@ -18,6 +18,7 @@ CUDA_VISIBLE_DEVICES=3 python lerobot/scripts/train.py \
   --policy.use_robot_state=false \
   --policy.vision_backbone=resnet18 \
   --policy.xyg_resize_shape=[84,84] \
+  --policy.use_language=true \
   --steps=30000 \
   --save_freq=5000 \
   --batch_size=512 \
@@ -25,6 +26,6 @@ CUDA_VISIBLE_DEVICES=3 python lerobot/scripts/train.py \
   --wandb.project=libero_DP \
   --wandb.disable_artifact=true \
   --wandb.entity=DynamicVLA \
-  --job_name=DP_ex1_angle_from_0_45_315
+  --job_name=DP_ex1_angle_from_0_45_315_use_language
 
 # Training checkpoints will be saved under: lerobot/outputs/train/202x-xx-xx/xx-xx-xx_diffusion

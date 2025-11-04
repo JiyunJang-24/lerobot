@@ -258,9 +258,9 @@ class DiffusionModel(nn.Module):
                                                         use_dynamic_common_feature=self.config.use_dynamic_common_feature,
                                                         num_dynamic_feature=self.config.num_dynamic_feature)
             if self.config.use_dynamic_common_feature:
-                dynamic_cond_dim = self.dynamic_encoder.feature_dim * self.config.num_dynamic_feature
-            else:
                 dynamic_cond_dim = self.dynamic_encoder.feature_dim
+            else:
+                dynamic_cond_dim = self.dynamic_encoder.feature_dim * self.config.num_dynamic_feature
 
         langauge_cond_dim = 0
         if self.config.use_language:
@@ -367,7 +367,6 @@ class DiffusionModel(nn.Module):
 
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode image features and concatenate them all together along with the state vector."""
-        import pdb; pdb.set_trace()
         batch_size, n_obs_steps = batch[OBS_ROBOT].shape[:2]
         global_cond_feats = []
         if self.config.use_language:
