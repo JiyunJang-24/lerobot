@@ -1468,7 +1468,6 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             break
         else:
             raise AssertionError("We expect the loop to break out as long as the index is within bounds.")
-        
         item = self._datasets[dataset_idx][idx - start_idx]
         item["action"], augmented_info = self.augment_action_sequence(item["action"])
         item["augmented_info"] = augmented_info

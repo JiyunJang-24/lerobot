@@ -12,7 +12,7 @@ export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH}"
 
 CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
   --dataset.repo_id=[xyg_10_10_0.0_0.0/v-1.000-1.000_num1,xyg_10_10_0.0_0.0/v-1.000-1.000_num5,xyg_10_10_45.0_45.0/v-1.000-1.000_num1,xyg_10_10_45.0_45.0/v-1.000-1.000_num5] \
-  --dataset.root=/root/Desktop/workspace/shortcut-learning-in-grps/dataset_git/libero_spatial_no_noops_island_1_lerobot \
+  --dataset.root=/root/Desktop/workspace/jiyun/shortcut-learning-in-grps/dataset_git/libero_spatial_no_noops_island_1_lerobot \
   --dataset.image_transforms.enable=false \
   --dataset.use_imagenet_stats=false \
   --dataset.split_episodes=false \

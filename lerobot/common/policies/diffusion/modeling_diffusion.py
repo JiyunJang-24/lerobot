@@ -234,7 +234,6 @@ class DiffusionModel(nn.Module):
     def __init__(self, config: DiffusionConfig):
         super().__init__()
         self.config = config
-
         # Build observation encoders (depending on which observations are provided).
         if self.config.use_robot_state:
             global_cond_dim = self.config.robot_state_feature.shape[0]
@@ -263,14 +262,19 @@ class DiffusionModel(nn.Module):
             else:
                 dynamic_cond_dim = self.dynamic_encoder.feature_dim
 
+        langauge_cond_dim = 0
+        if self.config.use_language:
+            self.language_encoder = TinyFrozenTextEncoder()
+            langauge_cond_dim = self.language_encoder.out_dim
+
         if self.config.env_state_feature:
             global_cond_dim += self.config.env_state_feature.shape[0]
 
         if self.config.train_dynamic_with_frozen_dp:
-            self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps)
-            self.unet_dynamic = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim + self.config.horizon * 7) 
+            self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + langauge_cond_dim)
+            self.unet_dynamic = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim + self.config.horizon * 7 + langauge_cond_dim) 
         else:
-            self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim)
+            self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim + langauge_cond_dim)
 
         self.noise_scheduler = _make_noise_scheduler(
             config.noise_scheduler_type,
@@ -363,8 +367,14 @@ class DiffusionModel(nn.Module):
 
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode image features and concatenate them all together along with the state vector."""
+        import pdb; pdb.set_trace()
         batch_size, n_obs_steps = batch[OBS_ROBOT].shape[:2]
         global_cond_feats = []
+        if self.use_language:
+            task = batch['task'] # list, len(batch['task']) = batch_size
+            language_feature = self.language_encoder(task)
+            global_cond_feats.append(language_feature)
+
         if self.config.use_robot_state:
             global_cond_feats.append(batch[OBS_ROBOT])
         # Extract image features.
@@ -446,6 +456,12 @@ class DiffusionModel(nn.Module):
         batch_size, n_obs_steps = batch[OBS_ROBOT].shape[:2]
         global_cond_feats = []
         global_cond_feats_dynamic = []
+        
+        if self.use_language:
+            task = batch['task'] # list, len(batch['task']) = batch_size
+            language_feature = self.language_encoder(task)
+            global_cond_feats.append(language_feature)
+
         if self.config.use_robot_state:
             global_cond_feats.append(batch[OBS_ROBOT])
         # Extract image features.
@@ -1207,3 +1223,59 @@ class DiffusionConditionalResidualBlock1d(nn.Module):
         out = self.conv2(out)
         out = out + self.residual_conv(x)
         return out
+
+
+from transformers import AutoTokenizer, AutoModel
+
+class TinyFrozenTextEncoder(nn.Module):
+    """
+    초경량 언어 인코더 (pretrained만 사용, 완전 동결)
+    - 기본: prajjwal1/bert-tiny (L=2, H=128 수준)
+    - 출력은 mean-pooling 후, 선형 투영으로 out_dim (기본 64)
+    - forward는 no_grad + eval로 동작 (GPU/CPU 자동 할당)
+    """
+    def __init__(
+        self,
+        model_name: str = "prajjwal1/bert-tiny",
+        tokenizer_name: str | None = None,  # None이면 model_name과 동일한 토크나이저
+        out_dim: int = 64,
+        max_length: int = 64,  # 짧은 프롬프트 가정: 속도/메모리 최적화
+        normalize: bool = False,  # 필요하면 L2 정규화
+    ):
+        super().__init__()
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name or model_name, use_fast=True)
+        self.model = AutoModel.from_pretrained(model_name)
+        self.model.eval()  # 평가 모드 고정
+        for p in self.model.parameters():
+            p.requires_grad = False  # 완전 동결
+
+        hidden = self.model.config.hidden_size
+        self.max_length = max_length
+        # self.proj = nn.Linear(hidden, out_dim) if out_dim != hidden else nn.Identity()
+        self.normalize = normalize
+
+    @staticmethod
+    def _mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        mask = attention_mask.unsqueeze(-1).type_as(last_hidden_state)  # (B, L, 1)
+        summed = (last_hidden_state * mask).sum(dim=1)                  # (B, H)
+        denom = mask.sum(dim=1).clamp(min=1e-9)                         # (B, 1)
+        return summed / denom
+
+    @torch.no_grad()
+    def forward(self, texts: list[str]) -> torch.Tensor:
+        device = next(self.parameters()).device
+        tok = self.tokenizer(
+            texts,
+            padding=True,
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+        tok = {k: v.to(device) for k, v in tok.items()}
+        out = self.model(input_ids=tok["input_ids"], attention_mask=tok["attention_mask"])
+        feat = self._mean_pool(out.last_hidden_state, tok["attention_mask"])  # (B, H)
+        import pdb; pdb.set_trace()
+        # feat = self.proj(pooled)  # (B, out_dim)
+        if self.normalize:
+            feat = torch.nn.functional.normalize(feat, p=2, dim=-1)
+        return feat
