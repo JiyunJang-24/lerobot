@@ -26,6 +26,7 @@ CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
   --policy.use_dynamic_feature=false \
   --policy.num_dynamic_feature=3 \
   --policy.use_normalize_for_action=true \
+  --policy.use_language=true \
   --axis_augmentation=true \
   --sign_augmentation=[false,false,false] \
   --use_action_avg=true \

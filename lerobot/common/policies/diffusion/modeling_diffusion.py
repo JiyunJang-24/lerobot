@@ -370,7 +370,7 @@ class DiffusionModel(nn.Module):
         import pdb; pdb.set_trace()
         batch_size, n_obs_steps = batch[OBS_ROBOT].shape[:2]
         global_cond_feats = []
-        if self.use_language:
+        if self.config.use_language:
             task = batch['task'] # list, len(batch['task']) = batch_size
             language_feature = self.language_encoder(task)
             global_cond_feats.append(language_feature)
@@ -457,7 +457,7 @@ class DiffusionModel(nn.Module):
         global_cond_feats = []
         global_cond_feats_dynamic = []
         
-        if self.use_language:
+        if self.config.use_language:
             task = batch['task'] # list, len(batch['task']) = batch_size
             language_feature = self.language_encoder(task)
             global_cond_feats.append(language_feature)
@@ -1238,7 +1238,7 @@ class TinyFrozenTextEncoder(nn.Module):
         self,
         model_name: str = "prajjwal1/bert-tiny",
         tokenizer_name: str | None = None,  # None이면 model_name과 동일한 토크나이저
-        out_dim: int = 64,
+        out_dim: int = 128,
         max_length: int = 64,  # 짧은 프롬프트 가정: 속도/메모리 최적화
         normalize: bool = False,  # 필요하면 L2 정규화
     ):
@@ -1248,7 +1248,7 @@ class TinyFrozenTextEncoder(nn.Module):
         self.model.eval()  # 평가 모드 고정
         for p in self.model.parameters():
             p.requires_grad = False  # 완전 동결
-
+        self.out_dim = out_dim
         hidden = self.model.config.hidden_size
         self.max_length = max_length
         # self.proj = nn.Linear(hidden, out_dim) if out_dim != hidden else nn.Identity()
@@ -1274,7 +1274,6 @@ class TinyFrozenTextEncoder(nn.Module):
         tok = {k: v.to(device) for k, v in tok.items()}
         out = self.model(input_ids=tok["input_ids"], attention_mask=tok["attention_mask"])
         feat = self._mean_pool(out.last_hidden_state, tok["attention_mask"])  # (B, H)
-        import pdb; pdb.set_trace()
         # feat = self.proj(pooled)  # (B, out_dim)
         if self.normalize:
             feat = torch.nn.functional.normalize(feat, p=2, dim=-1)
