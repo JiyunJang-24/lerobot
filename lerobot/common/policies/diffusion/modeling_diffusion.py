@@ -74,7 +74,7 @@ def load_optical_backbone(device, evaluation):
         optical_backbone_cfg["resume"] = optical_backbone_cfg["resume_train"]
     else:
         optical_backbone_cfg["resume"] = optical_backbone_cfg["resume_eval"]
-        
+
     if optical_backbone_cfg["resume"]:
         print('Load checkpoint: %s' % optical_backbone_cfg["resume"])
         checkpoint = torch.load(optical_backbone_cfg["resume"])
@@ -263,7 +263,7 @@ class DiffusionModel(nn.Module):
 
         if self.config.train_dynamic_with_frozen_dp:
             self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps)
-            self.unet_dynamic = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim) 
+            self.unet_dynamic = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim + self.config.horizon * 7) 
         else:
             self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim)
 
@@ -336,12 +336,21 @@ class DiffusionModel(nn.Module):
                 torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device),
                 global_cond=global_cond,
             )
+            B, H, A = base_model_output.shape
+            base_flat = base_model_output.reshape(B, H * A).detach()                     # (B, H*A), stop-grad
+
+            # dtype mismatch 방지
+            if base_flat.dtype != global_cond_dynamic.dtype:
+                base_flat = base_flat.to(global_cond_dynamic.dtype)
+
+            # concat: (B, D_dyn) + (B, H*A) -> (B, D_dyn + H*A)
+            cond_dyn = torch.cat([global_cond_dynamic, base_flat], dim=-1)      # (B, D_dyn + H*A)
             dynamic_output = self.unet_dynamic(
                 sample,
                 torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device),
-                global_cond=global_cond_dynamic,
+                global_cond=cond_dyn,
             )
-            output = base_model_output + dynamic_output
+            output = dynamic_output
             # Compute previous image: x_t -> x_t-1
             sample = self.noise_scheduler.step(output, t, sample, generator=generator).prev_sample
 
@@ -692,20 +701,26 @@ class DiffusionModel(nn.Module):
         with torch.no_grad():
             base_out = self.unet(x_t, timesteps, global_cond=global_cond)
             # base가 epsilon/x0/v 중 뭘 내는지에 따라 분기 필요
-            base_mode = self.config.prediction_type  # base/dynamic 동일 가정
-            # 만약 base가 다른 모드면, 아래에서 변환 함수로 맞춰주면 됩니다.
+        B, H, A = base_out.shape
+        base_flat = base_out.reshape(B, H * A).detach()                     # (B, H*A), stop-grad
 
+        # dtype mismatch 방지
+        if base_flat.dtype != global_cond_dynamic.dtype:
+            base_flat = base_flat.to(global_cond_dynamic.dtype)
+
+        # concat: (B, D_dyn) + (B, H*A) -> (B, D_dyn + H*A)
+        cond_dyn = torch.cat([global_cond_dynamic, base_flat], dim=-1)      # (B, D_dyn + H*A)
         # 3) dynamic 보정량 (같은 입력 x_t, 같은 t)
-        dyn_out = self.unet_dynamic(x_t, timesteps, global_cond=global_cond_dynamic)
+        dyn_out = self.unet_dynamic(x_t, timesteps, global_cond=cond_dyn)
 
         # 4) 타깃/결합 방식
         pred_type = self.config.prediction_type
         if pred_type == "epsilon":
             # 최종 ε̂ = ε_base + Δε
-            pred = base_out.detach() + dyn_out
+            pred = dyn_out
             target = eps
         elif pred_type == "sample":  # x0 파라미터화
-            pred = base_out.detach() + dyn_out
+            pred = dyn_out
             target = x0
         else:
             raise ValueError(f"Unsupported prediction type {pred_type}")
