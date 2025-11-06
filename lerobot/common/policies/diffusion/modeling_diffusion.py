@@ -180,12 +180,14 @@ class DiffusionPolicy(PreTrainedPolicy):
         # Note: It's important that this happens after stacking the images into a single key.
         
         self._queues = populate_queues(self._queues, batch)
-
+        if self.config.use_language == True:
+            task = batch['task']
         if len(self._queues["action"]) == 0:
             # stack n latest observations from the queue
             batch = {k: torch.stack(list(self._queues[k]), dim=1) for k in batch if k in self._queues}
+            if self.config.use_language == True:
+                batch['task'] = [task]
             actions = self.diffusion.generate_actions(batch)
-
             # TODO(rcadene): make above methods return output dictionary?
             if self.config.use_normalize_for_action:
                 if augmented_info is not None:
@@ -250,7 +252,6 @@ class DiffusionModel(nn.Module):
                 global_cond_dim += self.rgb_encoder.feature_dim * num_images
 
         dynamic_cond_dim = 0
-
         if self.config.use_dynamic_feature:
             num_images = len(self.config.image_features)
             self.dynamic_encoder = load_optical_backbone(get_device_from_parameters(self), 
