@@ -430,7 +430,7 @@ class DiffusionModel(nn.Module):
 
                     # 4) 기존 코드에서 zip over S 후 torch.cat(dim=0) 했던 결과와 동일한 축 조합으로 재구성
                     #    즉, [S*B, sfeat, f] 로 다시 펴서 'dynamic_features_list'를 만든다 (순서 동일)
-                    flat_feats = einops.rearrange(feats_SB, "s b f -> b s f", b=B, s=self.config.num_dynamic_feature)
+                    dynamic_features = einops.rearrange(feats_SB, "s b f -> b s f", b=B, s=self.config.num_dynamic_feature)
 
                 # 3) 원래 순서 보존하며 (S, B, sfeat, f) 로 복원
                 # feats_SB = einops.rearrange(flat_feats, "(s b) f -> s b f", s=S, b=B)
@@ -438,7 +438,6 @@ class DiffusionModel(nn.Module):
                 # 4) 기존 코드에서 zip over S 후 torch.cat(dim=0) 했던 결과와 동일한 축 조합으로 재구성
                 #    즉, [S*B, sfeat, f] 로 다시 펴서 'dynamic_features_list'를 만든다 (순서 동일)
                 # dynamic_features = einops.rearrange(flat_feats, "s b f -> b s f", b=B, s=self.config.num_dynamic_feature)
-                dynamic_features = flat_feats
                 #dynamic_features는 batch_size * num_dynamic_feature * feature_dim
                 global_cond_feats.append(dynamic_features)
 
