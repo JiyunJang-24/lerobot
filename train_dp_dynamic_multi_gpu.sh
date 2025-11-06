@@ -25,7 +25,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 lerobot/scripts/train_m
   --use_action_avg=true \
   --window_size=5 \
   --steps=100000 \
-  --save_freq=5000 \
+  --save_freq=10 \
   --batch_size=2 \
   --wandb.enable=false \
   --wandb.project=libero_DP \
