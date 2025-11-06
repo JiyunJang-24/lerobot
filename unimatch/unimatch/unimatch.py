@@ -141,7 +141,7 @@ class FlowActionAdapterAttn(nn.Module):
             nn.GELU(),
             nn.Linear(2*out_dim, out_dim),
         )
-        self.use_dynamic_common_feature=use_dynamic_common_feature, 
+        self.use_dynamic_common_feature=use_dynamic_common_feature
         if self.use_dynamic_common_feature:
             self.triplet_encoder = TinyTokenEncoder(dim=out_dim, heads=heads, mlp_ratio=triplet_mlp_ratio)
 
@@ -150,7 +150,7 @@ class FlowActionAdapterAttn(nn.Module):
         # 1) 이미지 → K개 요약 토큰(각 64차원)
         flow_tokens = self.attnpool(x_cat)        # (B, K, 64)
         flow_emb_64 = flow_tokens.mean(dim=1)     # 간단 평균 (또는 flow_tokens[:,0]으로 CLS 사용)
-
+        
         # 2) 액션 임베딩
         action_emb = self.action_proj(action)     # (B, 64)
 
