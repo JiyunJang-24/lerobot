@@ -21,6 +21,14 @@ from torch.optim.lr_scheduler import LRScheduler
 from lerobot.common.policies.pretrained import PreTrainedPolicy
 from lerobot.configs.train import TrainPipelineConfig
 
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.nn import DataParallel as DP
+
+def _unwrap(model):
+    # DDP/DP면 안쪽 실제 모듈을 꺼냄
+    if isinstance(model, (DDP, DP)):
+        return model.module
+    return model
 
 def make_optimizer_and_scheduler(
     cfg: TrainPipelineConfig, policy: PreTrainedPolicy
@@ -34,7 +42,10 @@ def make_optimizer_and_scheduler(
     Returns:
         tuple[Optimizer, LRScheduler | None]: The couple (Optimizer, Scheduler). Scheduler can be `None`.
     """
-    params = policy.get_optim_params() if cfg.use_policy_training_preset else policy.parameters()
+    try:
+        params = policy.get_optim_params() if cfg.use_policy_training_preset else policy.parameters()
+    except:
+        params = policy.module.get_optim_params() if cfg.use_policy_training_preset else policy.parameters()
     optimizer = cfg.optimizer.build(params)
     lr_scheduler = cfg.scheduler.build(optimizer, cfg.steps) if cfg.scheduler is not None else None
     return optimizer, lr_scheduler
