@@ -231,7 +231,6 @@ def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMSche
     else:
         raise ValueError(f"Unsupported noise scheduler type {name}")
 
-
 class DiffusionModel(nn.Module):
     def __init__(self, config: DiffusionConfig):
         super().__init__()
