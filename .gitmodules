@@ -1,0 +1,3 @@
+[submodule "Depth_Anything_V2"]
+	path = Depth_Anything_V2
+	url = https://github.com/DepthAnything/Depth-Anything-V2.git
