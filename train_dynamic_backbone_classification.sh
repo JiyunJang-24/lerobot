@@ -10,7 +10,7 @@ export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH}"
 
 CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train_dynamic_backbone_classification.py\
   --dataset.repo_id=[xyg_10_10_0.0_0.0/v-1.000-1.000_num1,xyg_10_10_0.0_0.0/v-1.000-1.000_num5,xyg_10_10_45.0_45.0/v-1.000-1.000_num1,xyg_10_10_45.0_45.0/v-1.000-1.000_num5,xyg_10_10_90.0_90.0/v-1.000-1.000_num1,xyg_10_10_90.0_90.0/v-1.000-1.000_num5,xyg_10_10_135.0_135.0/v-1.000-1.000_num1,xyg_10_10_135.0_135.0/v-1.000-1.000_num5,xyg_10_10_225.0_225.0/v-1.000-1.000_num1,xyg_10_10_225.0_225.0/v-1.000-1.000_num5,xyg_10_10_270.0_270.0/v-1.000-1.000_num1,xyg_10_10_270.0_270.0/v-1.000-1.000_num5,xyg_10_10_315.0_315.0/v-1.000-1.000_num1,xyg_10_10_315.0_315.0/v-1.000-1.000_num5] \
-  --dataset.root=/root/Desktop/workspace/jiyun/shortcut-learning-in-grps/dataset_git/libero_spatial_no_noops_island_1_lerobot \
+  --dataset.root=/data1/local/shortcut-learning-in-grps/dataset_git/libero_spatial_no_noops_island_1_lerobot \
   --dataset.image_transforms.enable=false \
   --dataset.use_imagenet_stats=false \
   --dataset.split_episodes=false \
@@ -35,7 +35,7 @@ CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train_dynamic_backbone_classificat
   --save_freq=500 \
   --batch_size=128 \
   --log_freq=1 \
-  --wandb.enable=true \
+  --wandb.enable=false \
   --wandb.project=libero_DP \
   --wandb.disable_artifact=true \
   --wandb.entity=DynamicVLA \

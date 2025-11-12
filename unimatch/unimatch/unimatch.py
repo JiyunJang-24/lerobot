@@ -510,7 +510,7 @@ class UniMatchVisionBackbone(nn.Module):
         # }
 
 class UniMatchFlowWDepth(nn.Module):
-    def __init__(self, optical_backbone: nn.Module,  use_dynamic_common_feature: bool = False, num_dynamic_feature: int = 3, use_linear_prob: bool=False):
+    def __init__(self, optical_backbone: nn.Module,  use_dynamic_common_feature: bool = False, num_dynamic_feature: int = 3, use_linear_prob: bool=False, load_pretrained_dynamic_model_path: str = None):
         super().__init__()
        
         self.optical_backbone = optical_backbone
@@ -544,6 +544,21 @@ class UniMatchFlowWDepth(nn.Module):
         # 최종 7-class 분류기
         self.classifier = nn.Linear(64, 7)
         self._freeze_all_except_flow_action()
+        self.load_pretrained_dynamic_model_path = load_pretrained_dynamic_model_path
+        if load_pretrained_dynamic_model_path is not None:
+            self.load_pretrained_model_weights(load_pretrained_dynamic_model_path)
+            self.freeze_all()
+            self.use_linear_prob = False
+        
+    def load_pretrained_model_weights(self, load_pretrained_dynamic_model_path: str):
+        load_checkpoint = torch.load(load_pretrained_dynamic_model_path, weights_only=False)
+        self.load_state_dict(load_checkpoint['model'], strict=False)
+        print("Loaded pretrained model from", load_pretrained_dynamic_model_path)
+
+    def freeze_all(self):
+        for p in self.parameters():
+            p.requires_grad = False
+        self.eval()
 
     def _freeze_all_except_flow_action(self):
         # 전부 동결
@@ -563,7 +578,7 @@ class UniMatchFlowWDepth(nn.Module):
         with torch.no_grad():
             batch_size = img0.size(0)
             flow_uv = self.optical_backbone(
-                img0[:batch_size//2], img1[:batch_size//2],
+                img0, img1,
                 attn_splits_list=[2, 8],
                 corr_radius_list=[-1, 4],
                 prop_radius_list=[-1, 1],
@@ -572,44 +587,71 @@ class UniMatchFlowWDepth(nn.Module):
                 attn_type='swin',
                 task = 'flow'
                 )["flow_preds"][0]
-            flow_uv2 = self.optical_backbone(
-                img0[batch_size//2:], img1[batch_size//2:],
-                attn_splits_list=[2, 8],
-                corr_radius_list=[-1, 4],
-                prop_radius_list=[-1, 1],
-                padding_factor=32,
-                num_reg_refine=6,
-                attn_type='swin',
-                task = 'flow'
-                )["flow_preds"][0]
-            flow_uv = torch.cat([flow_uv, flow_uv2], dim=0)
+            # flow_uv2 = self.optical_backbone(
+            #     img0[batch_size//2:], img1[batch_size//2:],
+            #     attn_splits_list=[2, 8],
+            #     corr_radius_list=[-1, 4],
+            #     prop_radius_list=[-1, 1],
+            #     padding_factor=32,
+            #     num_reg_refine=6,
+            #     attn_type='swin',
+            #     task = 'flow'
+            #     )["flow_preds"][0]
+            # flow_uv = torch.cat([flow_uv, flow_uv2], dim=0)
             # flow_uv = dict["flow_preds"], 총 4개가 나오고, 하나마다 batch_size * 2 * 256 * 256이 나옴
+        if  self.load_pretrained_dynamic_model_path is not None:
+            with torch.no_grad():
+                if viz == True:
+                    self.visualize_flow(img0, img1, flow_uv)
+                if depth_0 is not None and depth_1 is not None:
+                    if depth_0.dim() == 3: depth_0 = depth_0.unsqueeze(1)
+                    if depth_1.dim() == 3: depth_1 = depth_1.unsqueeze(1)
+                    visual_feature = torch.cat([depth_0, flow_uv, depth_1], dim=1)
+                else:
+                    visual_feature = flow_uv
 
-        if viz == True:
-            self.visualize_flow(img0, img1, flow_uv)
-        if depth_0 is not None and depth_1 is not None:
-            if depth_0.dim() == 3: depth_0 = depth_0.unsqueeze(1)
-            if depth_1.dim() == 3: depth_1 = depth_1.unsqueeze(1)
-            visual_feature = torch.cat([depth_0, flow_uv, depth_1], dim=1)
+                vis_feat = self.fuse_encoder(visual_feature).flatten(1)
+                # [B,128] → [B,64]
+                vis_64 = self.vis_proj(vis_feat)
+
+                if action is not None:
+                    #[B,7] → [B,64]
+                    act_64 = self.act_proj(action)
+                
+                fused_128 = torch.cat([vis_64, act_64], dim=1)
+                
+                cond_64 = self.proj_head(fused_128)
+                if self.use_linear_prob:
+                    logits = self.classifier(cond_64)
+                else:
+                    logits = cond_64
+                return logits
         else:
-            visual_feature = flow_uv
+            if viz == True:
+                self.visualize_flow(img0, img1, flow_uv)
+            if depth_0 is not None and depth_1 is not None:
+                if depth_0.dim() == 3: depth_0 = depth_0.unsqueeze(1)
+                if depth_1.dim() == 3: depth_1 = depth_1.unsqueeze(1)
+                visual_feature = torch.cat([depth_0, flow_uv, depth_1], dim=1)
+            else:
+                visual_feature = flow_uv
 
-        vis_feat = self.fuse_encoder(visual_feature).flatten(1)
-        # [B,128] → [B,64]
-        vis_64 = self.vis_proj(vis_feat)
+            vis_feat = self.fuse_encoder(visual_feature).flatten(1)
+            # [B,128] → [B,64]
+            vis_64 = self.vis_proj(vis_feat)
 
-        if action is not None:
-            #[B,7] → [B,64]
-            act_64 = self.act_proj(action)
-        
-        fused_128 = torch.cat([vis_64, act_64], dim=1)
-        
-        cond_64 = self.proj_head(fused_128)
-        if self.use_linear_prob:
-            logits = self.classifier(cond_64)
-        else:
-            logits = cond_64
-        return logits
+            if action is not None:
+                #[B,7] → [B,64]
+                act_64 = self.act_proj(action)
+            
+            fused_128 = torch.cat([vis_64, act_64], dim=1)
+            
+            cond_64 = self.proj_head(fused_128)
+            if self.use_linear_prob:
+                logits = self.classifier(cond_64)
+            else:
+                logits = cond_64
+            return logits
         
     def visualize_flow(self, img0, img1, flow_uv):
         for i in range(flow_uv.shape[0]):
@@ -637,135 +679,6 @@ class UniMatchFlowWDepth(nn.Module):
             cv2.imwrite(f"img0_{i:04d}.png", img0_rgb[..., ::-1])
             cv2.imwrite(f"img1_{i:04d}.png", img1_rgb[..., ::-1])
 
-
-class UniMatchFlowWDepth(nn.Module):
-    def __init__(self, optical_backbone: nn.Module,  use_dynamic_common_feature: bool = False, num_dynamic_feature: int = 3, use_linear_prob: bool=False):
-        super().__init__()
-       
-        self.optical_backbone = optical_backbone
-        self.feature_channels = getattr(optical_backbone, "feature_channels", 128)
-        self.feature_dim = 64
-        self.num_dynamic_feature=num_dynamic_feature
-        self.use_linear_prob = use_linear_prob
-        self.use_dynamic_common_feature=use_dynamic_common_feature
-        self.fuse_encoder = nn.Sequential(
-            nn.Conv2d(2, 32, 3, padding=1), nn.GELU(),
-            nn.Conv2d(32, 64, 3, stride=2, padding=1), nn.GELU(),   # 112x112
-            nn.Conv2d(64, 64, 3, padding=1), nn.GELU(),
-            nn.Conv2d(64, 128, 3, stride=2, padding=1), nn.GELU(),  # 56x56
-            nn.Conv2d(128, 128, 3, padding=1), nn.GELU(),
-            nn.AdaptiveAvgPool2d(1)  # [B,128,1,1]
-        )
-        self.vis_proj = nn.Linear(128, 64)   # 비주얼 64d
-
-        # action(7) → 64d
-        self.act_proj = nn.Sequential(
-            nn.Linear(7, 64), nn.GELU(),
-            nn.Linear(64, 64)
-        )
-
-        # proj: (64+64) → 64 (cond_64처럼 쓰기)
-        self.proj_head = nn.Sequential(
-            nn.LayerNorm(128),
-            nn.Linear(128, 64), nn.GELU()
-        )
-
-        # 최종 7-class 분류기
-        self.classifier = nn.Linear(64, 7)
-        self._freeze_all_except_flow_action()
-
-    def _freeze_all_except_flow_action(self):
-        # 전부 동결
-        for p in self.optical_backbone.parameters():
-            p.requires_grad = False
-        if self.use_linear_prob:
-            for p in self.classifier.parameters():
-                p.requires_grad = True
-        self.optical_backbone.eval()
-            
-    def forward(self, img0, img1, depth_0=None, depth_1=None, action=None, angle=None, viz=False):
-        """
-        flow_uv:  [B, 2, 224, 224]
-        depth_0:  [B, 224, 224]
-        depth_1:  [B, 224, 224]
-        """
-        with torch.no_grad():
-            batch_size = img0.size(0)
-            flow_uv = self.optical_backbone(
-                img0[:batch_size//2], img1[:batch_size//2],
-                attn_splits_list=[2, 8],
-                corr_radius_list=[-1, 4],
-                prop_radius_list=[-1, 1],
-                padding_factor=32,
-                num_reg_refine=6,
-                attn_type='swin',
-                task = 'flow'
-                )["flow_preds"][0]
-            flow_uv2 = self.optical_backbone(
-                img0[batch_size//2:], img1[batch_size//2:],
-                attn_splits_list=[2, 8],
-                corr_radius_list=[-1, 4],
-                prop_radius_list=[-1, 1],
-                padding_factor=32,
-                num_reg_refine=6,
-                attn_type='swin',
-                task = 'flow'
-                )["flow_preds"][0]
-            flow_uv = torch.cat([flow_uv, flow_uv2], dim=0)
-            # flow_uv = dict["flow_preds"], 총 4개가 나오고, 하나마다 batch_size * 2 * 256 * 256이 나옴
-
-        if viz == True:
-            self.visualize_flow(img0, img1, flow_uv)
-        if depth_0 is not None and depth_1 is not None:
-            if depth_0.dim() == 3: depth_0 = depth_0.unsqueeze(1)
-            if depth_1.dim() == 3: depth_1 = depth_1.unsqueeze(1)
-            visual_feature = torch.cat([depth_0, flow_uv, depth_1], dim=1)
-        else:
-            visual_feature = flow_uv
-
-        vis_feat = self.fuse_encoder(visual_feature).flatten(1)
-        # [B,128] → [B,64]
-        vis_64 = self.vis_proj(vis_feat)
-
-        if action is not None:
-            #[B,7] → [B,64]
-            act_64 = self.act_proj(action)
-        
-        fused_128 = torch.cat([vis_64, act_64], dim=1)
-        
-        cond_64 = self.proj_head(fused_128)
-        if self.use_linear_prob:
-            logits = self.classifier(cond_64)
-        else:
-            logits = cond_64
-        return logits
-        
-    def visualize_flow(self, img0, img1, flow_uv):
-        for i in range(flow_uv.shape[0]):
-            import cv2
-            flow_rgb = flow_tensor_to_image(flow_uv[i])  # (H,W,3), BGR, uint8 or float
-            cv2.imwrite(f"flow_{i:04d}.png", cv2.cvtColor(flow_rgb, cv2.COLOR_RGB2BGR))
-            if isinstance(flow_rgb, torch.Tensor):
-                flow_rgb = flow_rgb.detach().cpu().numpy()
-            if flow_rgb.dtype != np.uint8:
-                flow_rgb = (np.clip(flow_rgb, 0, 1) * 255).astype(np.uint8)
-            img_flow_rgb = flow_rgb[..., ::-1]  # BGR -> RGB
-
-            # img0, img1: (B,3,H,W) -> (H,W,3) uint8
-            img0_rgb = img0[i].permute(1,2,0).detach().cpu().numpy().astype(np.uint8)
-            img1_rgb = img1[i].permute(1,2,0).detach().cpu().numpy().astype(np.uint8)
-
-            # 시각화: img0 | img1 | flow
-            fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-            axes[0].imshow(img0_rgb);  axes[0].set_title(f"img0[{i}]");  axes[0].axis("off")
-            axes[1].imshow(img1_rgb);  axes[1].set_title(f"img1[{i}]");  axes[1].axis("off")
-            axes[2].imshow(img_flow_rgb); axes[2].set_title(f"flow[{i}]"); axes[2].axis("off")
-            plt.tight_layout()
-            plt.show()
-            cv2.imwrite(f"flow_{i:04d}.png", img_flow_rgb[..., ::-1])  # 다시 RGB->BGR로 저장
-            cv2.imwrite(f"img0_{i:04d}.png", img0_rgb[..., ::-1])
-            cv2.imwrite(f"img1_{i:04d}.png", img1_rgb[..., ::-1])
-            
 class UniMatch(nn.Module):
     def __init__(self,
                  num_scales=1,

@@ -112,6 +112,7 @@ class DiffusionConfig(PreTrainedConfig):
     num_dynamic_feature: int = 3
     use_normalize_for_action: bool = True
     use_language: bool = False
+    load_pretrained_dynamic_model_path: str | None = None
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
             "VISUAL": NormalizationMode.MEAN_STD,

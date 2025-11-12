@@ -59,7 +59,7 @@ optical_backbone_cfg = {
     "strict_resume": False,
 }
 
-def load_unimatch_backbone(device, evaluation, use_dynamic_common_feature=False, num_dynamic_feature=3, use_linear_prob=False):
+def load_unimatch_backbone(device, evaluation, use_dynamic_common_feature=False, num_dynamic_feature=3, use_linear_prob=False, load_pretrained_dynamic_model_path=None):
     #define optical backbone class
     optical_backbone = UniMatch(feature_channels=optical_backbone_cfg["feature_channels"],
                     num_scales=optical_backbone_cfg["num_scales"],
@@ -79,7 +79,7 @@ def load_unimatch_backbone(device, evaluation, use_dynamic_common_feature=False,
         optical_checkpoint = torch.load(optical_backbone_cfg["resume"])
         optical_backbone.load_state_dict(optical_checkpoint['model'], strict=optical_backbone_cfg["strict_resume"])
     
-    backbone_projector_model = UniMatchFlowWDepth(optical_backbone=optical_backbone, use_dynamic_common_feature=use_dynamic_common_feature, num_dynamic_feature=num_dynamic_feature, use_linear_prob=use_linear_prob)
+    backbone_projector_model = UniMatchFlowWDepth(optical_backbone=optical_backbone, use_dynamic_common_feature=use_dynamic_common_feature, num_dynamic_feature=num_dynamic_feature, use_linear_prob=use_linear_prob, load_pretrained_dynamic_model_path=load_pretrained_dynamic_model_path)
     #backbone_projector_model = UniMatchVisionBackbone(base_unimatch=backbone_model, fuse_multiscale=False, use_dynamic_common_feature=use_dynamic_common_feature, num_dynamic_feature=num_dynamic_feature, use_linear_prob=use_linear_prob)
     return backbone_projector_model
 
@@ -110,9 +110,9 @@ class DiffusionPolicy(PreTrainedPolicy):
         config.validate_features()
         self.config = config
         self.normalize_inputs = Normalize(config.input_features, config.normalization_mapping, dataset_stats)
-        if self.config.use_dynamic_feature:
-            config.output_features['dynamic.action'] = config.output_features['action']
-            dataset_stats['dynamic.action'] = dataset_stats['action']
+        # if self.config.use_dynamic_feature:
+            # config.output_features['dynamic.action'] = config.output_features['action']
+            # dataset_stats['dynamic.action'] = dataset_stats['action']
         self.normalize_targets = Normalize_With_Aug(
             config.output_features, config.normalization_mapping, dataset_stats, dataset_aug_stats
         )
@@ -256,7 +256,8 @@ class DiffusionModel(nn.Module):
             self.dynamic_encoder = load_unimatch_backbone(get_device_from_parameters(self), 
                                                         evaluation=self.config.evaluation, 
                                                         use_dynamic_common_feature=self.config.use_dynamic_common_feature,
-                                                        num_dynamic_feature=self.config.num_dynamic_feature)
+                                                        num_dynamic_feature=self.config.num_dynamic_feature,
+                                                        load_pretrained_dynamic_model_path=self.config.load_pretrained_dynamic_model_path)
             if self.config.use_dynamic_common_feature:
                 dynamic_cond_dim = self.dynamic_encoder.feature_dim
             else:
@@ -419,10 +420,13 @@ class DiffusionModel(nn.Module):
 
                 o_t   = flat_imgs[:, 0]  # [(S*B), 3, H, W]
                 o_tkp = flat_imgs[:, 1]  # [(S*B), 3, H, W]
+                img0_224 = F.interpolate(o_t, size=(224,224), mode='bilinear', align_corners=False, antialias=True).clamp_(0, 1).mul_(255.0)
+                img1_224 = F.interpolate(o_tkp, size=(224,224), mode='bilinear', align_corners=False, antialias=True).clamp_(0, 1).mul_(255.0)
+
                 # 2) 인코더 한 번 호출 (기존 zip+cat 루프 제거)
                 #    encoder 출력은 [(S*B), sfeat, f] 라고 가정 (sfeat == self.config.num_dynamic_feature)
-                flat_feats = self.dynamic_encoder(o_t, o_tkp, flat_actions)  # [(S*B), f]
-                if self.config.use_dynamic_common_feature:
+                flat_feats = self.dynamic_encoder(img0=img0_224, img1=img1_224, action=flat_actions)  # [(S*B), f]
+                if self.config.use_dynamic_common_feature or S == 1:
                     dynamic_features = flat_feats #[B, f]
                 else:
                     # 3) 원래 순서 보존하며 (S, B, sfeat, f) 로 복원
