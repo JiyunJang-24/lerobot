@@ -32,7 +32,7 @@ import torchvision
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from torch import Tensor, nn
-from unimatch.unimatch import UniMatch, UniMatchVisionBackbone, Flow2LLaMAAdapter
+from unimatch.unimatch import UniMatch, UniMatchFlowWDepth
 
 from lerobot.common.constants import OBS_ENV, OBS_ROBOT
 from lerobot.common.policies.diffusion.configuration_diffusion import DiffusionConfig
@@ -52,16 +52,16 @@ optical_backbone_cfg = {
     "num_head":1,
     "ffn_dim_expansion":4,
     "num_transformer_layers":6,
-    "reg_refine":None,
+    "reg_refine":True,
     "task":'flow',
     "resume_eval": "lerobot/unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
     "resume_train": "unimatch/pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth",
     "strict_resume": False,
 }
 
-def load_optical_backbone(device, evaluation, use_dynamic_common_feature=False, num_dynamic_feature=3):
+def load_unimatch_backbone(device, evaluation, use_dynamic_common_feature=False, num_dynamic_feature=3, use_linear_prob=False):
     #define optical backbone class
-    backbone_model = UniMatch(feature_channels=optical_backbone_cfg["feature_channels"],
+    optical_backbone = UniMatch(feature_channels=optical_backbone_cfg["feature_channels"],
                     num_scales=optical_backbone_cfg["num_scales"],
                     upsample_factor=optical_backbone_cfg["upsample_factor"],
                     num_head=optical_backbone_cfg["num_head"],
@@ -74,13 +74,13 @@ def load_optical_backbone(device, evaluation, use_dynamic_common_feature=False, 
         optical_backbone_cfg["resume"] = optical_backbone_cfg["resume_train"]
     else:
         optical_backbone_cfg["resume"] = optical_backbone_cfg["resume_eval"]
-
     if optical_backbone_cfg["resume"]:
-        print('Load checkpoint: %s' % optical_backbone_cfg["resume"])
-        checkpoint = torch.load(optical_backbone_cfg["resume"])
-        backbone_model.load_state_dict(checkpoint['model'], strict=optical_backbone_cfg["strict_resume"])
-    backbone_projector_model = UniMatchVisionBackbone(base_unimatch=backbone_model, fuse_multiscale=False, use_dynamic_common_feature=use_dynamic_common_feature, num_dynamic_feature=num_dynamic_feature)
-
+        print('Load Flow checkpoint: %s' % optical_backbone_cfg["resume"])
+        optical_checkpoint = torch.load(optical_backbone_cfg["resume"])
+        optical_backbone.load_state_dict(optical_checkpoint['model'], strict=optical_backbone_cfg["strict_resume"])
+    
+    backbone_projector_model = UniMatchFlowWDepth(optical_backbone=optical_backbone, use_dynamic_common_feature=use_dynamic_common_feature, num_dynamic_feature=num_dynamic_feature, use_linear_prob=use_linear_prob)
+    #backbone_projector_model = UniMatchVisionBackbone(base_unimatch=backbone_model, fuse_multiscale=False, use_dynamic_common_feature=use_dynamic_common_feature, num_dynamic_feature=num_dynamic_feature, use_linear_prob=use_linear_prob)
     return backbone_projector_model
 
 class DiffusionPolicy(PreTrainedPolicy):
@@ -253,7 +253,7 @@ class DiffusionModel(nn.Module):
         dynamic_cond_dim = 0
         if self.config.use_dynamic_feature:
             num_images = len(self.config.image_features)
-            self.dynamic_encoder = load_optical_backbone(get_device_from_parameters(self), 
+            self.dynamic_encoder = load_unimatch_backbone(get_device_from_parameters(self), 
                                                         evaluation=self.config.evaluation, 
                                                         use_dynamic_common_feature=self.config.use_dynamic_common_feature,
                                                         num_dynamic_feature=self.config.num_dynamic_feature)

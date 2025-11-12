@@ -4,9 +4,14 @@
 # Note: You may need to log in to Weights & Biases (wandb) if enabled.
 #   --dataset.repo_id=[xyg_20_10_15.0_65.0/v-0.400-0.400_num1,xyg_20_10_15.0_65.0/v-0.600-0.600_num5] \
   # --dataset.repo_id=[xyg_10_10_0.0_0.0/v-1.000-1.000_num1,xyg_10_10_0.0_0.0/v-1.000-1.000_num5,xyg_10_10_45.0_45.0/v-1.000-1.000_num1,xyg_10_10_45.0_45.0/v-1.000-1.000_num5,xyg_10_10_90.0_90.0/v-1.000-1.000_num1,xyg_10_10_90.0_90.0/v-1.000-1.000_num5,xyg_10_10_135.0_135.0/v-1.000-1.000_num1,xyg_10_10_135.0_135.0/v-1.000-1.000_num5,xyg_10_10_225.0_225.0/v-1.000-1.000_num1,xyg_10_10_225.0_225.0/v-1.000-1.000_num5,xyg_10_10_270.0_270.0/v-1.000-1.000_num1,xyg_10_10_270.0_270.0/v-1.000-1.000_num5,xyg_10_10_315.0_315.0/v-1.000-1.000_num1,xyg_10_10_315.0_315.0/v-1.000-1.000_num5] \
+bash train_dynamic_backbone_classification.sh
 
-CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
-  --dataset.repo_id=[xyg_10_10_0.0_0.0/v-1.000-1.000_num1,xyg_10_10_0.0_0.0/v-1.000-1.000_num5,xyg_10_10_45.0_45.0/v-1.000-1.000_num1,xyg_10_10_45.0_45.0/v-1.000-1.000_num5,xyg_10_10_315.0_315.0/v-1.000-1.000_num1,xyg_10_10_315.0_315.0/v-1.000-1.000_num5] \
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+REPO_ROOT="${SCRIPT_DIR}"
+export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH}"
+
+CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train_dynamic_backbone_contrastive.py \
+  --dataset.repo_id=[xyg_10_10_0.0_0.0/v-1.000-1.000_num1,xyg_10_10_0.0_0.0/v-1.000-1.000_num5,xyg_10_10_45.0_45.0/v-1.000-1.000_num1,xyg_10_10_45.0_45.0/v-1.000-1.000_num5,xyg_10_10_90.0_90.0/v-1.000-1.000_num1,xyg_10_10_90.0_90.0/v-1.000-1.000_num5,xyg_10_10_135.0_135.0/v-1.000-1.000_num1,xyg_10_10_135.0_135.0/v-1.000-1.000_num5,xyg_10_10_225.0_225.0/v-1.000-1.000_num1,xyg_10_10_225.0_225.0/v-1.000-1.000_num5,xyg_10_10_270.0_270.0/v-1.000-1.000_num1,xyg_10_10_270.0_270.0/v-1.000-1.000_num5,xyg_10_10_315.0_315.0/v-1.000-1.000_num1,xyg_10_10_315.0_315.0/v-1.000-1.000_num5] \
   --dataset.root=/root/Desktop/workspace/jiyun/shortcut-learning-in-grps/dataset_git/libero_spatial_no_noops_island_1_lerobot \
   --dataset.image_transforms.enable=false \
   --dataset.use_imagenet_stats=false \
@@ -19,18 +24,22 @@ CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
   --policy.vision_backbone=resnet18 \
   --policy.xyg_resize_shape=[84,84] \
   --policy.use_dynamic_feature=true \
-  --policy.num_dynamic_feature=3 \
+  --policy.num_dynamic_feature=1 \
   --policy.use_dynamic_common_feature=false \
   --policy.use_language=false \
   --use_action_avg=true \
+  --pretrain_dynamic_backbone=true \
+  --use_linear_prob=false \
   --window_size=5 \
-  --steps=100000 \
-  --save_freq=5000 \
-  --batch_size=48 \
+  --steps=5000 \
+  --save_freq=500 \
+  --batch_size=128 \
+  --log_freq=1 \
+  --use_depth=false \
   --wandb.enable=true \
   --wandb.project=libero_DP \
   --wandb.disable_artifact=true \
   --wandb.entity=DynamicVLA \
-  --job_name=Dynamic_DP_ex1_angle_from_0_45_315_use_language
+  --job_name=pretrain_dynamic_backbone_angle_from_0_to_315_contrastive
 
 # Training checkpoints will be saved under: lerobot/outputs/train/202x-xx-xx/xx-xx-xx_diffusion

@@ -3,9 +3,9 @@
 
 # gmflow-scale2-regrefine6, inference on image dir
 CUDA_VISIBLE_DEVICES=0 python main_flow.py \
---inference_dir demo/libero-demo/3-lkikjqlpzsxznnbyguwu \
+--inference_dir demo/libero \
 --resume pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth \
---output_path output/gmflow-scale2-regrefine6-davis \
+--output_path output/gmflow-scale2-regrefine6-libero \
 --padding_factor 32 \
 --upsample_factor 4 \
 --num_scales 2 \
@@ -15,6 +15,18 @@ CUDA_VISIBLE_DEVICES=0 python main_flow.py \
 --reg_refine \
 --num_reg_refine 6
 
+# CUDA_VISIBLE_DEVICES=0 python main_flow.py \
+# --inference_dir demo/flow-davis \
+# --resume pretrained/gmflow-scale2-regrefine6-mixdata-train320x576-4e7b215d.pth \
+# --output_path output/gmflow-scale2-regrefine6-davis \
+# --padding_factor 32 \
+# --upsample_factor 4 \
+# --num_scales 1 \
+# --attn_splits_list 2 \
+# --corr_radius_list -1 \
+# --prop_radius_list -1 \
+# --reg_refine \
+# --num_reg_refine 6
 
 # # gmflow-scale2-regrefine6, inference on video, save as video
 # CUDA_VISIBLE_DEVICES=0 python main_flow.py \

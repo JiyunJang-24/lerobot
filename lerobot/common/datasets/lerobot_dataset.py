@@ -1199,8 +1199,10 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         use_action_avg: bool = False,
         window_size: int | None = None,
         use_dynamic_feature: bool = False,
+        num_dynamic_feature: int = 3,
         axis_augmentation: bool = False,
         sign_augmentation: list[bool] = [False, False, False],
+        pretrain_dynamic_backbone: bool = False, 
     ):
         super().__init__()
         self.repo_ids = repo_ids
@@ -1209,7 +1211,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         # Construct the underlying datasets passing everything but `transform` and `delta_timestamps` which
         # are handled by this class.
         self.axis_augmentation = axis_augmentation # change x, y axis for data augmentation
-        self.sign_augmentation = sign_augmentation
+        self.sign_augmentation = sign_augmentation #[False, False, False]
         self._datasets = [
             LeRobotDataset(
                 repo_id,
@@ -1244,7 +1246,6 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                 "other datasets."
             )
             self.disabled_features.update(extra_keys)
-
         self.image_transforms = image_transforms
         self.delta_timestamps = delta_timestamps
         self.angle_to_indices = defaultdict(list)
@@ -1253,19 +1254,36 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             ang = extract_angle(repo_id)
             self.angle_to_indices[ang].append(idx)
             self.indices_to_angle[idx] = ang
+        robot_type_to_indices = defaultdict(list)
+        for idx, dataset in enumerate(self._datasets):
+            robot_type = dataset.meta.robot_type or self.repo_ids[idx]
+            robot_type_to_indices[robot_type].append(idx)
 
-        # TODO(rcadene, aliberts): We should not perform this aggregation for datasets
-        # with multiple robots of different ranges. Instead we should have one normalization
-        # per robot.
+        def _aggregate_attr(attr: str, indices: list[int]) -> dict[str, dict[str, np.ndarray]]:
+            values = [getattr(self._datasets[i].meta, attr) for i in indices]
+            return aggregate_stats(values)
 
-        self.stats = aggregate_stats([dataset.meta.stats for dataset in self._datasets])
-        self.aug_stats = aggregate_stats([dataset.meta.aug_stats for dataset in self._datasets])
+        if len(robot_type_to_indices) == 1:
+            self.stats = aggregate_stats([dataset.meta.stats for dataset in self._datasets])
+            self.aug_stats = aggregate_stats([dataset.meta.aug_stats for dataset in self._datasets])
+        else:
+            self.stats = {
+                robot_type: _aggregate_attr("stats", indices) for robot_type, indices in robot_type_to_indices.items()
+            }
+            self.aug_stats = {
+                robot_type: _aggregate_attr("aug_stats", indices)
+                for robot_type, indices in robot_type_to_indices.items()
+            }
 
         self.use_action_avg = use_action_avg
         self.window_size = window_size
         self.use_dynamic_feature = use_dynamic_feature
-        self.axis_augmentation = axis_augmentation # change x, y axis for data augmentation
-        self.sign_augmentation = sign_augmentation #[False, False, False]
+        self.num_dynamic_feature = num_dynamic_feature
+        self.pretrain_dynamic_backbone = pretrain_dynamic_backbone
+
+        if self.pretrain_dynamic_backbone:
+            self.angle_classes = sorted(self.angle_to_indices.keys())        # 예: [0.0, 45.0, 90.0, 135.0, 225.0, 270.0, 315.0]
+            self.angle_to_class = {ang: i for i, ang in enumerate(self.angle_classes)}
 
     def augment_action_sequence(
         self,
@@ -1469,6 +1487,10 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         else:
             raise AssertionError("We expect the loop to break out as long as the index is within bounds.")
         item = self._datasets[dataset_idx][idx - start_idx]
+        if self.pretrain_dynamic_backbone:
+            ang = self.indices_to_angle[dataset_idx]               # e.g., 270.0
+            cls = self.angle_to_class[ang]                         # e.g., 5 (0-based)
+            item["angle_class"] = torch.tensor(cls, dtype=torch.long)
         item["action"], augmented_info = self.augment_action_sequence(item["action"])
         item["augmented_info"] = augmented_info
         if self.use_dynamic_feature:
@@ -1483,7 +1505,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             candidates = self.angle_to_indices[ref_angle]
             # 2) 후보 중에서 "데이터셋 인덱스"를 랜덤으로 3번 선택 (중복 허용)
             #    - 중복 허용이므로 len(candidates) < 3 여도 문제 없음
-            chosen_ds_idxs = random.choices(candidates, k=3)
+            chosen_ds_idxs = random.choices(candidates, k=self.num_dynamic_feature)
 
             images, actions, src_indices = [], [], []
             for ds_i in chosen_ds_idxs:
@@ -1492,7 +1514,6 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                 max_start = ds.num_frames - self.window_size
                 start = random.randrange(max_start) if max_start > 0 else 0
                 next_idx = start + self.window_size  # 이미지 비교용
-
                 repo_name_i = self.repo_ids[ds_i]
                 img_delta_ts = self.delta_timestamps[repo_name_i]["observation.image"].index(0.0)
                 act_delta_ts = self.delta_timestamps[repo_name_i]["action"].index(0.0)
