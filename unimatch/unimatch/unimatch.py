@@ -540,9 +540,15 @@ class UniMatchFlowWDepth(nn.Module):
             nn.LayerNorm(128),
             nn.Linear(128, 64), nn.GELU()
         )
-
+        if self.use_dynamic_common_feature:
+            self.proj_head_common_feature = nn.Sequential(
+                nn.LayerNorm(64 * self.num_dynamic_feature),
+                nn.Linear(64 * self.num_dynamic_feature, 128), nn.GELU(),
+                nn.Linear(128, 64), nn.GELU()
+            )
         # 최종 7-class 분류기
-        self.classifier = nn.Linear(64, 7)
+        if self.use_linear_prob:
+            self.classifier = nn.Linear(64, 7)
         self._freeze_all_except_flow_action()
         self.load_pretrained_dynamic_model_path = load_pretrained_dynamic_model_path
         if load_pretrained_dynamic_model_path is not None:
@@ -575,6 +581,7 @@ class UniMatchFlowWDepth(nn.Module):
         depth_0:  [B, 224, 224]
         depth_1:  [B, 224, 224]
         """
+        self.optical_backbone.eval()
         with torch.no_grad():
             batch_size = img0.size(0)
             flow_uv = self.optical_backbone(
@@ -587,6 +594,7 @@ class UniMatchFlowWDepth(nn.Module):
                 attn_type='swin',
                 task = 'flow'
                 )["flow_preds"][0]
+        flow_uv = flow_uv.detach()
             # flow_uv2 = self.optical_backbone(
             #     img0[batch_size//2:], img1[batch_size//2:],
             #     attn_splits_list=[2, 8],
@@ -621,6 +629,13 @@ class UniMatchFlowWDepth(nn.Module):
                 fused_128 = torch.cat([vis_64, act_64], dim=1)
                 
                 cond_64 = self.proj_head(fused_128)
+                if self.use_dynamic_common_feature:
+                    B = cond_64.size(0)
+                    gs = self.num_dynamic_feature
+                    G = B // gs
+                    cond_triplet = cond_64.view(G, gs, -1)        # (G, 3, 64)
+                    cond_64 = cond_triplet.reshape(G, -1)   
+                    cond_64 = self.proj_head_common_feature(cond_64)
                 if self.use_linear_prob:
                     logits = self.classifier(cond_64)
                 else:
@@ -647,6 +662,14 @@ class UniMatchFlowWDepth(nn.Module):
             fused_128 = torch.cat([vis_64, act_64], dim=1)
             
             cond_64 = self.proj_head(fused_128)
+            if self.use_dynamic_common_feature:
+                B = cond_64.size(0)
+                gs = self.num_dynamic_feature
+                G = B // gs
+                cond_triplet = cond_64.view(G, gs, -1)        # (G, 3, 64)
+                cond_64 = cond_triplet.reshape(G, -1)   
+                cond_64 = self.proj_head_common_feature(cond_64)
+
             if self.use_linear_prob:
                 logits = self.classifier(cond_64)
             else:
