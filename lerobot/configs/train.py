@@ -81,6 +81,7 @@ class TrainPipelineConfig(HubMixin):
             self.policy.pretrained_path = policy_path
         elif self.resume:
             # The entire train config is already loaded, we just need to get the checkpoint dir
+            import pdb; pdb.set_trace()
             config_path = parser.parse_arg("config_path")
             if not config_path:
                 raise ValueError(
