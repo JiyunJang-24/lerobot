@@ -68,6 +68,10 @@ class TrainPipelineConfig(HubMixin):
     axis_augmentation: bool = False
     sign_augmentation: list[bool] = field(default_factory=lambda: [False, False, False])
     pretrained_path: str = None
+    use_linear_prob: bool = False
+    pretrain_dynamic_backbone: bool = False
+    viz: bool = False
+    use_depth: bool = False
     def __post_init__(self):
         self.checkpoint_path = None
 
