@@ -12,7 +12,7 @@ from .attention import SelfAttnPropagation
 from .geometry import flow_warp, compute_flow_with_depth_pose
 from .reg_refine import BasicUpdateBlock
 from .utils import normalize_img, feature_add_position, upsample_flow_with_mask
-# from unimatch.utils.flow_viz import flow_tensor_to_image, flow_to_image
+from .flow_viz import flow_tensor_to_image, flow_to_image
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -510,7 +510,7 @@ class UniMatchVisionBackbone(nn.Module):
         # }
 
 class UniMatchFlowWDepth(nn.Module):
-    def __init__(self, optical_backbone: nn.Module,  use_dynamic_common_feature: bool = False, num_dynamic_feature: int = 3, use_linear_prob: bool=False, load_pretrained_dynamic_model_path: str = None):
+    def __init__(self, optical_backbone: nn.Module,  use_dynamic_common_feature: bool = False, num_dynamic_feature: int = 3, use_linear_prob: bool=False, load_pretrained_dynamic_model_path: str = None, use_depth: bool=False):
         super().__init__()
        
         self.optical_backbone = optical_backbone
@@ -519,8 +519,13 @@ class UniMatchFlowWDepth(nn.Module):
         self.num_dynamic_feature=num_dynamic_feature
         self.use_linear_prob = use_linear_prob
         self.use_dynamic_common_feature=use_dynamic_common_feature
+        self.use_depth = use_depth
+        if self.use_depth:
+            c_flow = 4  # flow_uv(2) + depth_0(1) + depth_1(1)
+        else:
+            c_flow = 2  # flow_uv(2)
         self.fuse_encoder = nn.Sequential(
-            nn.Conv2d(2, 32, 3, padding=1), nn.GELU(),
+            nn.Conv2d(c_flow, 32, 3, padding=1), nn.GELU(),
             nn.Conv2d(32, 64, 3, stride=2, padding=1), nn.GELU(),   # 112x112
             nn.Conv2d(64, 64, 3, padding=1), nn.GELU(),
             nn.Conv2d(64, 128, 3, stride=2, padding=1), nn.GELU(),  # 56x56
@@ -605,12 +610,7 @@ class UniMatchFlowWDepth(nn.Module):
             with torch.no_grad():
                 if viz == True:
                     self.visualize_flow(img0, img1, flow_uv)
-                if depth_0 is not None and depth_1 is not None:
-                    if depth_0.dim() == 3: depth_0 = depth_0.unsqueeze(1)
-                    if depth_1.dim() == 3: depth_1 = depth_1.unsqueeze(1)
-                    visual_feature = torch.cat([depth_0, flow_uv, depth_1], dim=1)
-                else:
-                    visual_feature = flow_uv
+                visual_feature = flow_uv
 
                 vis_feat = self.fuse_encoder(visual_feature).flatten(1)
                 # [B,128] → [B,64]
@@ -638,12 +638,8 @@ class UniMatchFlowWDepth(nn.Module):
         else:
             if viz == True:
                 self.visualize_flow(img0, img1, flow_uv)
-            if depth_0 is not None and depth_1 is not None:
-                if depth_0.dim() == 3: depth_0 = depth_0.unsqueeze(1)
-                if depth_1.dim() == 3: depth_1 = depth_1.unsqueeze(1)
-                visual_feature = torch.cat([depth_0, flow_uv, depth_1], dim=1)
-            else:
-                visual_feature = flow_uv
+
+            visual_feature = flow_uv
             vis_feat = self.fuse_encoder(visual_feature).flatten(1)
             # [B,128] → [B,64]
             vis_64 = self.vis_proj(vis_feat)
@@ -672,7 +668,9 @@ class UniMatchFlowWDepth(nn.Module):
     def visualize_flow(self, img0, img1, flow_uv):
         for i in range(flow_uv.shape[0]):
             import cv2
-            flow_rgb = flow_tensor_to_image(flow_uv[i])  # (H,W,3), BGR, uint8 or float
+            flow_rgb = flow_tensor_to_image(flow_uv[i])  # (3,H,W), BGR, uint8 or float
+            flow_rgb = np.transpose(flow_rgb, (1, 2, 0))  # [H, W, 3]
+
             cv2.imwrite(f"flow_{i:04d}.png", cv2.cvtColor(flow_rgb, cv2.COLOR_RGB2BGR))
             if isinstance(flow_rgb, torch.Tensor):
                 flow_rgb = flow_rgb.detach().cpu().numpy()
