@@ -12,7 +12,7 @@ from .attention import SelfAttnPropagation
 from .geometry import flow_warp, compute_flow_with_depth_pose
 from .reg_refine import BasicUpdateBlock
 from .utils import normalize_img, feature_add_position, upsample_flow_with_mask
-from unimatch.utils.flow_viz import flow_tensor_to_image, flow_to_image
+from .flow_viz import flow_tensor_to_image, flow_to_image
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -510,7 +510,7 @@ class UniMatchVisionBackbone(nn.Module):
         # }
 
 class UniMatchFlowWDepth(nn.Module):
-    def __init__(self, optical_backbone: nn.Module,  use_dynamic_common_feature: bool = False, num_dynamic_feature: int = 3, use_linear_prob: bool=False, load_pretrained_dynamic_model_path: str = None):
+    def __init__(self, optical_backbone: nn.Module,  use_dynamic_common_feature: bool = False, num_dynamic_feature: int = 3, use_linear_prob: bool=False, load_pretrained_dynamic_model_path: str = None, use_depth: bool=False):
         super().__init__()
        
         self.optical_backbone = optical_backbone
@@ -519,8 +519,13 @@ class UniMatchFlowWDepth(nn.Module):
         self.num_dynamic_feature=num_dynamic_feature
         self.use_linear_prob = use_linear_prob
         self.use_dynamic_common_feature=use_dynamic_common_feature
+        self.use_depth = use_depth
+        if self.use_depth:
+            c_flow = 4  # flow_uv(2) + depth_0(1) + depth_1(1)
+        else:
+            c_flow = 2  # flow_uv(2)
         self.fuse_encoder = nn.Sequential(
-            nn.Conv2d(2, 32, 3, padding=1), nn.GELU(),
+            nn.Conv2d(c_flow, 32, 3, padding=1), nn.GELU(),
             nn.Conv2d(32, 64, 3, stride=2, padding=1), nn.GELU(),   # 112x112
             nn.Conv2d(64, 64, 3, padding=1), nn.GELU(),
             nn.Conv2d(64, 128, 3, stride=2, padding=1), nn.GELU(),  # 56x56
@@ -548,7 +553,7 @@ class UniMatchFlowWDepth(nn.Module):
             )
         # 최종 7-class 분류기
         if self.use_linear_prob:
-            self.classifier = nn.Linear(64, 7)
+            self.classifier = nn.Linear(64, 9)
         self._freeze_all_except_flow_action()
         self.load_pretrained_dynamic_model_path = load_pretrained_dynamic_model_path
         if load_pretrained_dynamic_model_path is not None:
@@ -574,13 +579,8 @@ class UniMatchFlowWDepth(nn.Module):
             for p in self.classifier.parameters():
                 p.requires_grad = True
         self.optical_backbone.eval()
-            
-    def forward(self, img0, img1, depth_0=None, depth_1=None, action=None, angle=None, viz=False):
-        """
-        flow_uv:  [B, 2, 224, 224]
-        depth_0:  [B, 224, 224]
-        depth_1:  [B, 224, 224]
-        """
+
+    def extract_flow(self, img0, img1):
         self.optical_backbone.eval()
         with torch.no_grad():
             batch_size = img0.size(0)
@@ -593,30 +593,24 @@ class UniMatchFlowWDepth(nn.Module):
                 num_reg_refine=6,
                 attn_type='swin',
                 task = 'flow'
-                )["flow_preds"][0]
-        flow_uv = flow_uv.detach()
-            # flow_uv2 = self.optical_backbone(
-            #     img0[batch_size//2:], img1[batch_size//2:],
-            #     attn_splits_list=[2, 8],
-            #     corr_radius_list=[-1, 4],
-            #     prop_radius_list=[-1, 1],
-            #     padding_factor=32,
-            #     num_reg_refine=6,
-            #     attn_type='swin',
-            #     task = 'flow'
-            #     )["flow_preds"][0]
-            # flow_uv = torch.cat([flow_uv, flow_uv2], dim=0)
-            # flow_uv = dict["flow_preds"], 총 4개가 나오고, 하나마다 batch_size * 2 * 256 * 256이 나옴
+                )["flow_preds"][0].detach()
+        return flow_uv
+
+    def forward(self, img0=None, img1=None, depth_0=None, depth_1=None, action=None, angle=None, viz=False, pre_extract_flow=None):
+        """
+        flow_uv:  [B, 2, 224, 224]
+        depth_0:  [B, 224, 224]
+        depth_1:  [B, 224, 224]
+        """
+        if pre_extract_flow is not None:
+            flow_uv = pre_extract_flow
+        else:
+            flow_uv = self.extract_flow(img0, img1)
         if  self.load_pretrained_dynamic_model_path is not None:
             with torch.no_grad():
                 if viz == True:
                     self.visualize_flow(img0, img1, flow_uv)
-                if depth_0 is not None and depth_1 is not None:
-                    if depth_0.dim() == 3: depth_0 = depth_0.unsqueeze(1)
-                    if depth_1.dim() == 3: depth_1 = depth_1.unsqueeze(1)
-                    visual_feature = torch.cat([depth_0, flow_uv, depth_1], dim=1)
-                else:
-                    visual_feature = flow_uv
+                visual_feature = flow_uv
 
                 vis_feat = self.fuse_encoder(visual_feature).flatten(1)
                 # [B,128] → [B,64]
@@ -644,13 +638,8 @@ class UniMatchFlowWDepth(nn.Module):
         else:
             if viz == True:
                 self.visualize_flow(img0, img1, flow_uv)
-            if depth_0 is not None and depth_1 is not None:
-                if depth_0.dim() == 3: depth_0 = depth_0.unsqueeze(1)
-                if depth_1.dim() == 3: depth_1 = depth_1.unsqueeze(1)
-                visual_feature = torch.cat([depth_0, flow_uv, depth_1], dim=1)
-            else:
-                visual_feature = flow_uv
 
+            visual_feature = flow_uv
             vis_feat = self.fuse_encoder(visual_feature).flatten(1)
             # [B,128] → [B,64]
             vis_64 = self.vis_proj(vis_feat)
@@ -679,7 +668,9 @@ class UniMatchFlowWDepth(nn.Module):
     def visualize_flow(self, img0, img1, flow_uv):
         for i in range(flow_uv.shape[0]):
             import cv2
-            flow_rgb = flow_tensor_to_image(flow_uv[i])  # (H,W,3), BGR, uint8 or float
+            flow_rgb = flow_tensor_to_image(flow_uv[i])  # (3,H,W), BGR, uint8 or float
+            flow_rgb = np.transpose(flow_rgb, (1, 2, 0))  # [H, W, 3]
+
             cv2.imwrite(f"flow_{i:04d}.png", cv2.cvtColor(flow_rgb, cv2.COLOR_RGB2BGR))
             if isinstance(flow_rgb, torch.Tensor):
                 flow_rgb = flow_rgb.detach().cpu().numpy()
