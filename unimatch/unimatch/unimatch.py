@@ -510,7 +510,7 @@ class UniMatchVisionBackbone(nn.Module):
         # }
 
 class UniMatchFlowWDepth(nn.Module):
-    def __init__(self, optical_backbone: nn.Module,  use_dynamic_common_feature: bool = False, num_dynamic_feature: int = 3, use_linear_prob: bool=False, load_pretrained_dynamic_model_path: str = None, use_depth: bool=False):
+    def __init__(self, optical_backbone: nn.Module,  use_dynamic_common_feature: bool = False, num_dynamic_feature: int = 3, use_linear_prob: bool=False, load_pretrained_dynamic_model_path: str = None, use_depth: bool=False, use_robot_eef_poses: bool=False, pred_basis: bool=False):
         super().__init__()
        
         self.optical_backbone = optical_backbone
@@ -520,6 +520,8 @@ class UniMatchFlowWDepth(nn.Module):
         self.use_linear_prob = use_linear_prob
         self.use_dynamic_common_feature=use_dynamic_common_feature
         self.use_depth = use_depth
+        self.use_robot_eef_poses = use_robot_eef_poses
+        self.pred_basis = pred_basis
         if self.use_depth:
             c_flow = 4  # flow_uv(2) + depth_0(1) + depth_1(1)
         else:
@@ -539,11 +541,21 @@ class UniMatchFlowWDepth(nn.Module):
             nn.Linear(7, 64), nn.GELU(),
             nn.Linear(64, 64)
         )
+        if self.use_robot_eef_poses:
+            self.robot_eef_pos_proj = nn.Sequential(
+                nn.Linear(6, 64), nn.GELU(),
+                nn.Linear(64, 64)
+            )
 
         # proj: (64+64) → 64 (cond_64처럼 쓰기)
+        if self.use_robot_eef_poses:
+            in_dim = 64 + 64 + 64
+        else:
+            in_dim = 64 + 64
         self.proj_head = nn.Sequential(
-            nn.LayerNorm(128),
-            nn.Linear(128, 64), nn.GELU()
+            nn.LayerNorm(in_dim),
+            nn.Linear(in_dim, 64), nn.GELU(),
+            nn.Linear(64, 64), nn.GELU(),
         )
         if self.use_dynamic_common_feature:
             self.proj_head_common_feature = nn.Sequential(
@@ -552,8 +564,12 @@ class UniMatchFlowWDepth(nn.Module):
                 nn.Linear(128, 64), nn.GELU()
             )
         # 최종 7-class 분류기
+        if self.pred_basis:
+            out_dim = 6
+        else:
+            out_dim = 9
         if self.use_linear_prob:
-            self.classifier = nn.Linear(64, 9)
+            self.classifier = nn.Linear(64, out_dim)
         self._freeze_all_except_flow_action()
         self.load_pretrained_dynamic_model_path = load_pretrained_dynamic_model_path
         if load_pretrained_dynamic_model_path is not None:
@@ -596,7 +612,7 @@ class UniMatchFlowWDepth(nn.Module):
                 )["flow_preds"][0].detach()
         return flow_uv
 
-    def forward(self, img0=None, img1=None, depth_0=None, depth_1=None, action=None, angle=None, viz=False, pre_extract_flow=None):
+    def forward(self, img0=None, img1=None, depth_0=None, depth_1=None, action=None, angle=None, viz=False, pre_extract_flow=None, robot_eef_poses=None):
         """
         flow_uv:  [B, 2, 224, 224]
         depth_0:  [B, 224, 224]
@@ -619,8 +635,12 @@ class UniMatchFlowWDepth(nn.Module):
                 if action is not None:
                     #[B,7] → [B,64]
                     act_64 = self.act_proj(action)
-                
-                fused_128 = torch.cat([vis_64, act_64], dim=1)
+                if self.use_robot_eef_poses:
+                    #[B,3] → [B,64]
+                    state_64 = self.robot_eef_pos_proj(robot_eef_poses)
+                    fused_128 = torch.cat([vis_64, act_64, state_64], dim=1)
+                else:
+                    fused_128 = torch.cat([vis_64, act_64], dim=1)
                 
                 cond_64 = self.proj_head(fused_128)
                 if self.use_dynamic_common_feature:
@@ -647,8 +667,12 @@ class UniMatchFlowWDepth(nn.Module):
             if action is not None:
                 #[B,7] → [B,64]
                 act_64 = self.act_proj(action)
-            
-            fused_128 = torch.cat([vis_64, act_64], dim=1)
+            if self.use_robot_eef_poses:
+                #[B,3] → [B,64]
+                state_64 = self.robot_eef_pos_proj(robot_eef_poses)
+                fused_128 = torch.cat([vis_64, act_64, state_64], dim=1)
+            else:
+                fused_128 = torch.cat([vis_64, act_64], dim=1)
             
             cond_64 = self.proj_head(fused_128)
             if self.use_dynamic_common_feature:
@@ -692,6 +716,7 @@ class UniMatchFlowWDepth(nn.Module):
             cv2.imwrite(f"flow_{i:04d}.png", img_flow_rgb[..., ::-1])  # 다시 RGB->BGR로 저장
             cv2.imwrite(f"img0_{i:04d}.png", img0_rgb[..., ::-1])
             cv2.imwrite(f"img1_{i:04d}.png", img1_rgb[..., ::-1])
+
 
 class UniMatch(nn.Module):
     def __init__(self,
