@@ -73,6 +73,10 @@ from lerobot.common.datasets.video_utils import (
     get_safe_default_codec,
     get_video_info,
 )
+from lerobot.common.datasets.camear_utils import (
+    PluckerEmbedder,
+    remove_extrinsic_camera_axis_correction
+)
 from lerobot.common.robot_devices.robots.utils import Robot
 import re
 from collections import defaultdict
@@ -1202,7 +1206,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         num_dynamic_feature: int = 3,
         axis_augmentation: bool = False,
         sign_augmentation: list[bool] = [False, False, False],
-        pretrain_dynamic_backbone: bool = False, 
+        pretrain_dynamic_backbone: bool = False,
     ):
         super().__init__()
         self.repo_ids = repo_ids
@@ -1285,6 +1289,13 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             self.angle_classes = sorted(self.angle_to_indices.keys())        # 예: [0.0, 45.0, 90.0, 135.0, 225.0, 270.0, 315.0]
             self.angle_to_class = {ang: i for i, ang in enumerate(self.angle_classes)}
 
+        # PLUCKER
+        if self.use_plucker:
+            self.image_size = 256
+            self.plucker_embedder = PluckerEmbedder(img_size=self.image_size, device='cuda')
+        else:
+            self.plucker_embedder = None
+
     def augment_action_sequence(
         self,
         action: torch.Tensor,          # (T, 7)
@@ -1330,7 +1341,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             sx = bool(sf.get("x", False))
             sy = bool(sf.get("y", False))
             sz = bool(sf.get("z", False))
-            
+
             if applied_sign:
                 if sx: aug[:, x_i] = -aug[:, x_i]
                 if sy: aug[:, y_i] = -aug[:, y_i]
@@ -1368,7 +1379,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         if flip_x: aug[:, x_i] = -aug[:, x_i]
         if flip_y: aug[:, y_i] = -aug[:, y_i]
         if flip_z: aug[:, z_idx] = -aug[:, z_idx]
-        
+
         do_axis = bool(self.axis_augmentation and (torch.rand((), device=device) < p_axis).item())
         xy_swapped = False
         if do_axis:
@@ -1491,8 +1502,14 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             extrinsic_matrix = item['extrinsic_matrix']
             intrinsic_matrix = item['extrinsic_matrix']
             if self.use_plucker:
-                pass
                 #TODO WS: concat (image, plucker embedding)
+                plucker_extrinsic_matrix = remove_extrinsic_camera_axis_correction(extrinsic_matrix)
+
+                with torch.no_grad():
+                    plucker_data = self.plucker_embedder(intrinsics_tensor, cam_to_world_tensor)
+                    plucker_tensor = einops.rearrange(plucker_data['plucker'][0], 'h w c -> c h w')
+
+
             elif self.use_dynamics_basis:
                 pass
                 #TODO JY: concat (image, basis)
@@ -1553,7 +1570,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                 item["dynamic.action"], info=augmented_info
             )
             item["dynamic.augmented_info"] = dynamic_augmented_info
-            
+
         item["dataset_index"] = torch.tensor(dataset_idx)
 
         for data_key in self.disabled_features:

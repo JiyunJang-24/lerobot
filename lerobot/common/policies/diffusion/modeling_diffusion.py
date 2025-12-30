@@ -78,7 +78,7 @@ def load_unimatch_backbone(device, evaluation, use_dynamic_common_feature=False,
         print('Load Flow checkpoint: %s' % optical_backbone_cfg["resume"])
         optical_checkpoint = torch.load(optical_backbone_cfg["resume"])
         optical_backbone.load_state_dict(optical_checkpoint['model'], strict=optical_backbone_cfg["strict_resume"])
-    
+
     backbone_projector_model = UniMatchFlowWDepth(optical_backbone=optical_backbone, use_dynamic_common_feature=use_dynamic_common_feature, num_dynamic_feature=num_dynamic_feature, use_linear_prob=use_linear_prob, load_pretrained_dynamic_model_path=load_pretrained_dynamic_model_path)
     #backbone_projector_model = UniMatchVisionBackbone(base_unimatch=backbone_model, fuse_multiscale=False, use_dynamic_common_feature=use_dynamic_common_feature, num_dynamic_feature=num_dynamic_feature, use_linear_prob=use_linear_prob)
     return backbone_projector_model
@@ -178,7 +178,7 @@ class DiffusionPolicy(PreTrainedPolicy):
                 [batch[key] for key in self.config.image_features], dim=-4
             )
         # Note: It's important that this happens after stacking the images into a single key.
-        
+
         self._queues = populate_queues(self._queues, batch)
         if self.config.use_language == True:
             task = batch['task']
@@ -253,8 +253,8 @@ class DiffusionModel(nn.Module):
         dynamic_cond_dim = 0
         if self.config.use_dynamic_feature:
             num_images = len(self.config.image_features)
-            self.dynamic_encoder = load_unimatch_backbone(get_device_from_parameters(self), 
-                                                        evaluation=self.config.evaluation, 
+            self.dynamic_encoder = load_unimatch_backbone(get_device_from_parameters(self),
+                                                        evaluation=self.config.evaluation,
                                                         use_dynamic_common_feature=self.config.use_dynamic_common_feature,
                                                         num_dynamic_feature=self.config.num_dynamic_feature,
                                                         load_pretrained_dynamic_model_path=self.config.load_pretrained_dynamic_model_path)
@@ -273,7 +273,7 @@ class DiffusionModel(nn.Module):
 
         if self.config.train_dynamic_with_frozen_dp:
             self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + langauge_cond_dim)
-            self.unet_dynamic = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim + self.config.horizon * 7 + langauge_cond_dim) 
+            self.unet_dynamic = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim + self.config.horizon * 7 + langauge_cond_dim)
         else:
             self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps + dynamic_cond_dim + langauge_cond_dim)
 
@@ -451,13 +451,13 @@ class DiffusionModel(nn.Module):
         out = torch.cat(feats_flat, dim=-1)  # [B, sum_i(T_i*D)]
         # Concatenate features then flatten to (B, global_cond_dim).
         return out
-    
+
     def _prepare_global_conditioning_frozen_dynamic(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode image features and concatenate them all together along with the state vector."""
         batch_size, n_obs_steps = batch[OBS_ROBOT].shape[:2]
         global_cond_feats = []
         global_cond_feats_dynamic = []
-        
+
         if self.config.use_language:
             task = batch['task'] # list, len(batch['task']) = batch_size
             language_feature = self.language_encoder(task)
@@ -537,7 +537,7 @@ class DiffusionModel(nn.Module):
 
         # Concatenate features then flatten to (B, global_cond_dim).
         return out, out_dynamic
-    
+
     def generate_actions(self, batch: dict[str, Tensor]) -> Tensor:
         """
         This function expects `batch` to have:
@@ -560,7 +560,7 @@ class DiffusionModel(nn.Module):
             global_cond = self._prepare_global_conditioning(batch)  # (B, global_cond_dim)
             # run sampling
             actions = self.conditional_sample(batch_size, global_cond=global_cond)
-        
+
 
         # Extract `n_action_steps` steps worth of actions (from the current observation).
         start = n_obs_steps - 1
@@ -633,7 +633,7 @@ class DiffusionModel(nn.Module):
             loss = loss * in_episode_bound.unsqueeze(-1)
 
         return loss.mean()
-    
+
     def compute_loss_dynamic_one_more_noise(self, batch: dict[str, Tensor]) -> Tensor:
         """
         This function expects `batch` to have (at least):
@@ -898,7 +898,7 @@ class DiffusionRgbEncoder(nn.Module):
     def __init__(self, config: DiffusionConfig):
         super().__init__()
         # Set up optional preprocessing.
-        
+
         if config.xyg_resize_shape is not None:
             self.resize = torchvision.transforms.Resize(config.xyg_resize_shape)
         else:
@@ -922,6 +922,9 @@ class DiffusionRgbEncoder(nn.Module):
         # Note: This assumes that the layer4 feature map is children()[-3]
         # TODO(alexander-soare): Use a safer alternative.
         self.backbone = nn.Sequential(*(list(backbone_model.children())[:-2]))
+
+        # TODO(WS): Modify channel of first conv layer of the backbone model
+
         if config.use_group_norm:
             if config.pretrained_backbone_weights:
                 # raise ValueError(
@@ -961,7 +964,7 @@ class DiffusionRgbEncoder(nn.Module):
         # Preprocess: maybe crop (if it was set up in the __init__).
         if self.resize is not None:
             x = self.resize(x)
-            
+
         if self.do_crop:
             if self.training:  # noqa: SIM108
                 x = self.maybe_random_crop(x)
