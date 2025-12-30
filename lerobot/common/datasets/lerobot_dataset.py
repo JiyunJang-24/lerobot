@@ -1487,6 +1487,17 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         else:
             raise AssertionError("We expect the loop to break out as long as the index is within bounds.")
         item = self._datasets[dataset_idx][idx - start_idx]
+        try:
+            extrinsic_matrix = item['extrinsic_matrix']
+            intrinsic_matrix = item['extrinsic_matrix']
+            if self.use_plucker:
+                pass
+                #TODO WS: concat (image, plucker embedding)
+            elif self.use_dynamics_basis:
+                pass
+                #TODO JY: concat (image, basis)
+        except:
+            print("INFO: Not use cam info")
         if self.pretrain_dynamic_backbone:
             ang = self.indices_to_angle[dataset_idx]               # e.g., 270.0
             cls = self.angle_to_class[ang]                         # e.g., 5 (0-based)
