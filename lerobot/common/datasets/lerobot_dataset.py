@@ -18,7 +18,7 @@ import logging
 import shutil
 from pathlib import Path
 from typing import Callable, Tuple, Dict, Any
-
+import cv2
 import random
 import datasets
 import numpy as np
@@ -26,6 +26,7 @@ import packaging.version
 import PIL.Image
 import torch
 import torch.utils
+import einops
 from datasets import concatenate_datasets, load_dataset
 from huggingface_hub import HfApi, snapshot_download
 from huggingface_hub.constants import REPOCARD_NAME
@@ -73,11 +74,16 @@ from lerobot.common.datasets.video_utils import (
     get_safe_default_codec,
     get_video_info,
 )
-from lerobot.common.datasets.camear_utils import (
+from lerobot.common.datasets.camera_utils import (
     PluckerEmbedder,
     remove_extrinsic_camera_axis_correction
 )
 from lerobot.common.robot_devices.robots.utils import Robot
+from lerobot.common.datasets.viz_utils import (
+    draw_clipped_arrow_fixed_head, 
+    project_world_point_to_pixel_cam_to_world,
+    save_rgb_image
+)
 import re
 from collections import defaultdict
 
@@ -1207,6 +1213,8 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         axis_augmentation: bool = False,
         sign_augmentation: list[bool] = [False, False, False],
         pretrain_dynamic_backbone: bool = False,
+        use_plucker: bool = False,
+        use_dynamics_basis: bool = False
     ):
         super().__init__()
         self.repo_ids = repo_ids
@@ -1288,6 +1296,9 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         if self.pretrain_dynamic_backbone:
             self.angle_classes = sorted(self.angle_to_indices.keys())        # 예: [0.0, 45.0, 90.0, 135.0, 225.0, 270.0, 315.0]
             self.angle_to_class = {ang: i for i, ang in enumerate(self.angle_classes)}
+
+        self.use_plucker = use_plucker
+        self.use_dynamics_basis = use_dynamics_basis
 
         # PLUCKER
         if self.use_plucker:
@@ -1483,6 +1494,221 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
     def __len__(self):
         return self.num_frames
 
+    def _get_motion_dynamics_basis(self, intrinsic_matrix, cam_to_world: np.ndarray):
+        """
+        cam_to_world: (4,4) camera pose matrix from pose_set (agentview).
+                    This is T_{w<-c} (world_from_camera).
+
+        Returns:
+            torch.Tensor (3,2) on CUDA:
+                [ [ux, vx],
+                [uy, vy],
+                [uz, vz] ]
+            each row is a unit 2D direction vector in image (u,v) space corresponding to
+            +X, +Y, +Z axes of the world/robot frame.
+        """
+
+        K = intrinsic_matrix
+        cx, cy = float(K[0, 2]), float(K[1, 2])
+
+        cam_to_world = np.asarray(cam_to_world, dtype=np.float32)
+        assert cam_to_world.shape == (4, 4)
+
+        # R_wc: world_from_cam rotation
+        R_wc = cam_to_world[:3, :3]          # (3,3)
+        # R_cw: cam_from_world rotation
+        R_cw = R_wc.T
+
+        # world/robot axes unit directions
+        dirs_w = np.stack([
+            np.array([1.0, 0.0, 0.0], dtype=np.float32),  # +X
+            np.array([0.0, 1.0, 0.0], dtype=np.float32),  # +Y
+            np.array([0.0, 0.0, 1.0], dtype=np.float32),  # +Z
+        ], axis=0)  # (3,3)
+
+        eps = 1e-8
+        basis_uv = np.zeros((3, 2), dtype=np.float32)
+
+        for i in range(3):
+            d_w = dirs_w[i]                       # (3,)
+            d_c = (R_cw @ d_w.reshape(3, 1)).reshape(3)  # (3,)
+
+            # homogeneous image direction (vanishing point)
+            p = (K @ d_c.reshape(3, 1)).reshape(3)  # (3,)
+            denom = float(p[2])
+            if abs(denom) < eps:
+                denom = eps if denom >= 0 else -eps
+
+            u = float(p[0] / denom)
+            v = float(p[1] / denom)
+
+            vec = np.array([u - cx, v - cy], dtype=np.float32)  # direction from principal point
+            n = float(np.linalg.norm(vec))
+            if n < eps:
+                # degenerate fallback
+                vec = p[:2].astype(np.float32)
+                n = float(np.linalg.norm(vec)) + eps
+
+            basis_uv[i] = vec / (n + eps)
+
+        return torch.from_numpy(basis_uv).float().cuda()
+
+    def _make_motion_basis_axis_rgb_tensor_cam_to_world(
+        self,
+        rgb_tensor: torch.Tensor,                  # (3,H,W) or (B,3,H,W) in [0,1]
+        motion_dynamics_basis: torch.Tensor,        # (6,) or (3,2)
+        intrinsic_matrix: np.ndarray | torch.Tensor | None = None,  # (3,3) shared
+        cam_to_world: np.ndarray | torch.Tensor | None = None,      # (4,4) shared
+        robot_eef_abs_poses: np.ndarray | torch.Tensor | None = None,  # (7,) or (B,7)
+        origin_robot: bool = False,
+        origin_fallback: str = "pp",               # "pp" or "center"
+        arrow_len: int = 60,
+        line_thickness: int = 2,
+        return_overlay: bool = False,
+        overlay_alpha: float = 0.85,
+    ):
+        """
+        Returns:
+        - unbatched input (3,H,W): (axis_tensor: (3,H,W), origin_xy: (ox,oy))
+        - batched input (B,3,H,W): (axis_tensor: (B,3,H,W), origins: List[(ox,oy)])
+        """
+
+        def to_numpy(x):
+            if x is None:
+                return None
+            if isinstance(x, torch.Tensor):
+                return x.detach().cpu().numpy()
+            return np.asarray(x)
+
+        # --- normalize rgb to batched ---
+        input_batched = (rgb_tensor.ndim == 4)
+        if rgb_tensor.ndim == 3:
+            rgb_b = rgb_tensor.unsqueeze(0)  # (1,3,H,W)
+        elif rgb_tensor.ndim == 4:
+            rgb_b = rgb_tensor              # (B,3,H,W)
+        else:
+            raise ValueError(f"rgb_tensor must be (3,H,W) or (B,3,H,W), got {tuple(rgb_tensor.shape)}")
+
+        B, C, H, W = rgb_b.shape
+        if C < 3:
+            raise ValueError(f"rgb_tensor must have at least 3 channels, got C={C}")
+
+        # --- basis (shared) -> (3,2) numpy ---
+        if motion_dynamics_basis.ndim == 1:
+            basis = motion_dynamics_basis.view(3, 2)
+        else:
+            basis = motion_dynamics_basis
+        basis_np = basis.detach().float().cpu().numpy()  # (3,2)
+
+        # --- shared K, c2w as numpy (for projection) ---
+        K_np = to_numpy(intrinsic_matrix) if intrinsic_matrix is not None else None
+        c2w_np = to_numpy(cam_to_world) if cam_to_world is not None else None
+
+        if origin_robot:
+            if K_np is None or c2w_np is None:
+                # origin_robot=True인데 K/c2w가 없으면 투영 불가 -> fallback으로 처리
+                pass
+            else:
+                if K_np.shape != (3, 3):
+                    raise ValueError(f"intrinsic_matrix must be (3,3), got {K_np.shape}")
+                if c2w_np.shape != (4, 4):
+                    raise ValueError(f"cam_to_world must be (4,4), got {c2w_np.shape}")
+
+        # --- eef poses normalize ---
+        eef_np = None
+        if robot_eef_abs_poses is not None:
+            eef_np = to_numpy(robot_eef_abs_poses)
+            # allow (7,) or (B,7)
+            if eef_np.ndim == 1:
+                if eef_np.shape[0] != 7:
+                    raise ValueError(f"robot_eef_abs_poses must be (7,) got {eef_np.shape}")
+                eef_np = np.broadcast_to(eef_np[None, :], (B, 7))
+            elif eef_np.ndim == 2:
+                if eef_np.shape != (B, 7):
+                    raise ValueError(f"robot_eef_abs_poses must be (B,7) got {eef_np.shape}, expected {(B,7)}")
+            else:
+                raise ValueError(f"robot_eef_abs_poses must be (7,) or (B,7), got ndim={eef_np.ndim}")
+
+        axis_list = []
+        origins = []
+
+        for b in range(B):
+            rgb_i = rgb_b[b]
+            H_i, W_i = int(rgb_i.shape[1]), int(rgb_i.shape[2])
+
+            # 1) origin from EEF projection if available
+            ox = oy = None
+            if origin_robot and (c2w_np is not None) and (eef_np is not None) and (K_np is not None):
+                p_world = eef_np[b, :3]  # (3,)
+                uv = project_world_point_to_pixel_cam_to_world(K_np, c2w_np, p_world)
+                if uv is not None:
+                    u, v = uv
+                    ox = int(round(float(u))); oy = int(round(float(v)))
+                    ox = max(0, min(W_i - 1, ox))
+                    oy = max(0, min(H_i - 1, oy))
+
+            # 2) fallback origin
+            if ox is None or oy is None:
+                if origin_fallback == "pp":
+                    if K_np is None:
+                        ox, oy = W_i // 2, H_i // 2
+                    else:
+                        ox, oy = int(round(float(K_np[0, 2]))), int(round(float(K_np[1, 2])))
+                        ox = max(0, min(W_i - 1, ox))
+                        oy = max(0, min(H_i - 1, oy))
+                elif origin_fallback == "center":
+                    ox, oy = W_i // 2, H_i // 2
+                else:
+                    raise ValueError("origin_fallback must be 'pp' or 'center'")
+
+            # draw base
+            if return_overlay:
+                base_rgb = (rgb_i[:3].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
+            else:
+                base_rgb = np.zeros((H_i, W_i, 3), dtype=np.uint8)
+
+            img_bgr = cv2.cvtColor(base_rgb, cv2.COLOR_RGB2BGR)
+
+            colors = [(0, 0, 255), (0, 255, 0), (255, 0, 0)]  # BGR: x=red y=green z=blue
+            origin_xy = (ox, oy)
+            cv2.circle(img_bgr, origin_xy, 3, (255, 255, 255), -1)
+
+            for i in range(3):
+                du = float(basis_np[i, 0])
+                dv = -float(basis_np[i, 1])  # image v-axis flip
+
+                end_xy = (int(round(ox + arrow_len * du)),
+                        int(round(oy + arrow_len * dv)))
+
+                draw_clipped_arrow_fixed_head(
+                    img_bgr,
+                    origin_xy,
+                    end_xy,
+                    colors[i],
+                    thickness=line_thickness,
+                    head_len_px=8,
+                    head_w_px=6,
+                )
+
+            out_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)  # uint8
+
+            if return_overlay:
+                rgb_u8 = (rgb_i[:3].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
+                out_rgb = (overlay_alpha * out_rgb + (1.0 - overlay_alpha) * rgb_u8).astype(np.uint8)
+
+            axis_tensor_i = torch.from_numpy(out_rgb).float().permute(2, 0, 1) / 255.0
+            axis_tensor_i = axis_tensor_i.to(device=rgb_tensor.device)
+
+            axis_list.append(axis_tensor_i)
+            origins.append((ox, oy))
+
+        axis_tensor = torch.stack(axis_list, dim=0)  # (B,3,H,W)
+
+        if input_batched:
+            return axis_tensor, origins
+        else:
+            return axis_tensor[0], origins[0]
+
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         if idx >= len(self):
             raise IndexError(f"Index {idx} out of bounds. Dataset length is {len(self)}.")
@@ -1500,19 +1726,37 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         item = self._datasets[dataset_idx][idx - start_idx]
         try:
             extrinsic_matrix = item['extrinsic_matrix']
-            intrinsic_matrix = item['extrinsic_matrix']
+            intrinsic_matrix = item['intrinsic_matrix']
+            robot_state = item['observation.state'] #gripper qpos (2), eef pos (3), eef quat (4)
+            img = item['observation.image'] # S * C * H * W
+            plucker_extrinsic_matrix = remove_extrinsic_camera_axis_correction(extrinsic_matrix)
             if self.use_plucker:
                 #TODO WS: concat (image, plucker embedding)
-                plucker_extrinsic_matrix = remove_extrinsic_camera_axis_correction(extrinsic_matrix)
-
                 with torch.no_grad():
-                    plucker_data = self.plucker_embedder(intrinsics_tensor, cam_to_world_tensor)
-                    plucker_tensor = einops.rearrange(plucker_data['plucker'][0], 'h w c -> c h w')
-
+                    intrinsic_tensor = intrinsic_matrix.unsqueeze(0).expand(img.shape[0], -1, -1).to('cuda')
+                    extrinsic_tensor = extrinsic_matrix.unsqueeze(0).expand(img.shape[0], -1, -1).to('cuda')
+                    plucker_data = self.plucker_embedder(intrinsic_tensor, extrinsic_tensor)
+                    plucker_tensor = einops.rearrange(plucker_data['plucker'], 'b h w c -> b c h w').to('cpu')
+                item['observation.image'] = torch.cat([img, plucker_tensor], dim=1)
 
             elif self.use_dynamics_basis:
-                pass
-                #TODO JY: concat (image, basis)
+                with torch.no_grad():
+                    motion_dynamics_basis = self._get_motion_dynamics_basis(intrinsic_matrix, cam_to_world=plucker_extrinsic_matrix).reshape(-1)
+                    axis_tensor, origin_xy = self._make_motion_basis_axis_rgb_tensor_cam_to_world(
+                        rgb_tensor=img,                  # (B, 3,H,W)
+                        motion_dynamics_basis=motion_dynamics_basis,
+                        cam_to_world=plucker_extrinsic_matrix,                  # cam_pose = cam_to_world (고정)
+                        intrinsic_matrix=intrinsic_matrix,
+                        robot_eef_abs_poses=robot_state[:, -7:],  # eef pose (B, 7)
+                        origin_robot=True,
+                        origin_fallback="pp",
+                        arrow_len=60,
+                        return_overlay=False,
+                    ) # (B, 3, H, W)
+                item['observation.image'] = torch.cat([img, axis_tensor], dim=1)
+                # save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
+                # save_rgb_image(item['observation.image'][0], "tmp_dir/robot_image.png")
+                
         except:
             print("INFO: Not use cam info")
         if self.pretrain_dynamic_backbone:

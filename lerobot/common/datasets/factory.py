@@ -119,7 +119,10 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
             num_dynamic_feature=cfg.policy.num_dynamic_feature,
             axis_augmentation=cfg.axis_augmentation,
             sign_augmentation=cfg.sign_augmentation,
-            pretrain_dynamic_backbone=cfg.pretrain_dynamic_backbone
+            pretrain_dynamic_backbone=cfg.pretrain_dynamic_backbone,
+            use_plucker=cfg.use_plucker,
+            use_dynamics_basis=cfg.use_dynamics_basis,
+            
         )
         
         logging.info(

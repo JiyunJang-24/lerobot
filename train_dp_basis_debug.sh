@@ -29,5 +29,7 @@ CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
   --save_freq=5 \
   --batch_size=4 \
   --wandb.enable=false \
-  --num_workers=0 
+  --num_workers=0 \
+  --use_plucker=true \
+  --use_dynamics_basis=false
 # Training checkpoints will be saved under: lerobot/outputs/train/202x-xx-xx/xx-xx-xx_diffusion

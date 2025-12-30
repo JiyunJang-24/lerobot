@@ -70,6 +70,8 @@ class TrainPipelineConfig(HubMixin):
     pretrained_path: str = None
     use_linear_prob: bool = False
     pretrain_dynamic_backbone: bool = False
+    use_plucker: bool = False
+    use_dynamics_basis: bool = False
     viz: bool = False
     use_depth: bool = False
     def __post_init__(self):
