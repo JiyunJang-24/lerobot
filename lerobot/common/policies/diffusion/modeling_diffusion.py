@@ -919,11 +919,19 @@ class DiffusionRgbEncoder(nn.Module):
         backbone_model = getattr(torchvision.models, config.vision_backbone)(
             weights=config.pretrained_backbone_weights
         )
+        if config.image_channel != 3:
+            original_conv = backbone_model.conv1
+            backbone_model.conv1 = nn.Conv2d(
+                config.image_channel,  # 3 RGB + 6 Plucker channels or 3 basis channels
+                original_conv.out_channels,
+                kernel_size=original_conv.kernel_size,
+                stride=original_conv.stride,
+                padding=original_conv.padding,
+                bias=original_conv.bias is not None
+            )
         # Note: This assumes that the layer4 feature map is children()[-3]
         # TODO(alexander-soare): Use a safer alternative.
         self.backbone = nn.Sequential(*(list(backbone_model.children())[:-2]))
-
-        # TODO(WS): Modify channel of first conv layer of the backbone model
 
         if config.use_group_norm:
             if config.pretrained_backbone_weights:

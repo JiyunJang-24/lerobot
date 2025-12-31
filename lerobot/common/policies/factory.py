@@ -132,6 +132,11 @@ def make_policy(
                 "by default without stats from a dataset."
             )
         features = env_to_policy_features(env_cfg)
+        
+    for key, ft in features.items():
+        if ft.type is FeatureType.VISUAL:
+            C, H, W = features[key].shape
+            features[key].shape = (cfg.image_channel, H, W)
 
     cfg.output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
     cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}

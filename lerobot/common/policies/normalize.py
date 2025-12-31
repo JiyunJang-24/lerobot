@@ -168,14 +168,26 @@ class Normalize(nn.Module):
                 std = buffer["std"]
                 assert not torch.isinf(mean).any(), _no_stats_error_str("mean")
                 assert not torch.isinf(std).any(), _no_stats_error_str("std")
-                batch[key] = (batch[key] - mean) / (std + 1e-8)
+                axis = -mean.ndim
+                if mean.shape[axis] != batch[key].shape[axis]:
+                    C = mean.shape[0]
+                    batch[key][:, :, :C] = (batch[key][:, :, :C] - mean) / (std + 1e-8) #batch[image] = B * S * C * H * W
+                else: 
+                    batch[key] = (batch[key] - mean) / (std + 1e-8)
+                
             elif norm_mode is NormalizationMode.MIN_MAX:
                 min = buffer["min"]
                 max = buffer["max"]
                 assert not torch.isinf(min).any(), _no_stats_error_str("min")
                 assert not torch.isinf(max).any(), _no_stats_error_str("max")
                 # normalize to [0,1]
-                batch[key] = (batch[key] - min) / (max - min + 1e-8)
+                import pdb; pdb.set_trace()
+                axis = -mean.ndim
+                if mean.shape[axis] != batch[key].shape[axis]:
+                    C = min.shape[0]
+                    batch[key][:, :, :C] = (batch[key][:, :, :C] - min) / (max - min + 1e-8)
+                else: 
+                    batch[key] = (batch[key] - min) / (max - min + 1e-8)
                 # normalize to [-1, 1]
                 batch[key] = batch[key] * 2 - 1
             else:

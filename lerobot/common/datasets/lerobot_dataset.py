@@ -1303,7 +1303,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         # PLUCKER
         if self.use_plucker:
             self.image_size = 256
-            self.plucker_embedder = PluckerEmbedder(img_size=self.image_size, device='cuda')
+            self.plucker_embedder = PluckerEmbedder(img_size=self.image_size, device='cpu')
         else:
             self.plucker_embedder = None
 
@@ -1551,7 +1551,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
 
             basis_uv[i] = vec / (n + eps)
 
-        return torch.from_numpy(basis_uv).float().cuda()
+        return torch.from_numpy(basis_uv).float()
 
     def _make_motion_basis_axis_rgb_tensor_cam_to_world(
         self,
@@ -1731,12 +1731,11 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             img = item['observation.image'] # S * C * H * W
             plucker_extrinsic_matrix = remove_extrinsic_camera_axis_correction(extrinsic_matrix)
             if self.use_plucker:
-                #TODO WS: concat (image, plucker embedding)
                 with torch.no_grad():
-                    intrinsic_tensor = intrinsic_matrix.unsqueeze(0).expand(img.shape[0], -1, -1).to('cuda')
-                    extrinsic_tensor = extrinsic_matrix.unsqueeze(0).expand(img.shape[0], -1, -1).to('cuda')
+                    intrinsic_tensor = intrinsic_matrix.unsqueeze(0).expand(img.shape[0], -1, -1)
+                    extrinsic_tensor = extrinsic_matrix.unsqueeze(0).expand(img.shape[0], -1, -1)
                     plucker_data = self.plucker_embedder(intrinsic_tensor, extrinsic_tensor)
-                    plucker_tensor = einops.rearrange(plucker_data['plucker'], 'b h w c -> b c h w').to('cpu')
+                    plucker_tensor = einops.rearrange(plucker_data['plucker'], 's h w c -> s c h w')
                 item['observation.image'] = torch.cat([img, plucker_tensor], dim=1)
 
             elif self.use_dynamics_basis:
@@ -1757,8 +1756,8 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                 # save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
                 # save_rgb_image(item['observation.image'][0], "tmp_dir/robot_image.png")
                 
-        except:
-            print("INFO: Not use cam info")
+        except Exception as e:
+            print(e)
         if self.pretrain_dynamic_backbone:
             ang = self.indices_to_angle[dataset_idx]               # e.g., 270.0
             cls = self.angle_to_class[ang]                         # e.g., 5 (0-based)
