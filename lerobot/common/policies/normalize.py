@@ -169,9 +169,15 @@ class Normalize(nn.Module):
                 assert not torch.isinf(mean).any(), _no_stats_error_str("mean")
                 assert not torch.isinf(std).any(), _no_stats_error_str("std")
                 axis = -mean.ndim
+                ndim = batch[key].ndim
                 if mean.shape[axis] != batch[key].shape[axis]:
                     C = mean.shape[0]
-                    batch[key][:, :, :C] = (batch[key][:, :, :C] - mean) / (std + 1e-8) #batch[image] = B * S * C * H * W
+                    if ndim == 4:
+                        batch[key][:, :C] = (batch[key][:, :C] - mean) / (std + 1e-8)
+                    elif ndim == 5:
+                        batch[key][:, :, :C] = (batch[key][:, :, :C] - mean) / (std + 1e-8) #batch[image] = B * S * C * H * W
+                    elif ndim == 3:
+                        batch[key][:C] = (batch[key][:C] - mean) / (std + 1e-8)
                 else: 
                     batch[key] = (batch[key] - mean) / (std + 1e-8)
                 
