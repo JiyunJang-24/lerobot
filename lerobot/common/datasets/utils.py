@@ -23,7 +23,8 @@ from pathlib import Path
 from pprint import pformat
 from types import SimpleNamespace
 from typing import Any
-
+import logging
+from typing import Any, Tuple
 import datasets
 import jsonlines
 import numpy as np
@@ -888,3 +889,35 @@ def validate_episode_buffer(episode_buffer: dict, total_episodes: int, features:
             f"In episode_buffer not in features: {buffer_keys - set(features)}"
             f"In features not in episode_buffer: {set(features) - buffer_keys}"
         )
+
+def _value_signature(x: Any) -> Tuple:
+    """Return a comparable signature for a value (dtype + shape + structure)."""
+    if isinstance(x, torch.Tensor):
+        return ("torch", str(x.dtype), tuple(x.shape))
+    if isinstance(x, np.ndarray):
+        return ("numpy", str(x.dtype), tuple(x.shape))
+    if isinstance(x, (list, tuple)):
+        # for sequences: compare length + element signatures (shallow)
+        if len(x) == 0:
+            return (type(x).__name__, 0)
+        return (type(x).__name__, len(x), _value_signature(x[0]))
+    if isinstance(x, dict):
+        # sorted keys for stable comparison
+        return ("dict", tuple((k, _value_signature(v)) for k, v in sorted(x.items())))
+    # scalar / others
+    return (type(x).__name__,)
+
+
+def _get_key_signature(ds, key: str, sample_idx: int = 0) -> Tuple:
+    """Safely get signature for ds[sample_idx][key]."""
+    try:
+        v = ds[sample_idx][key]
+    except Exception as e:
+        return ("__ERROR__", type(e).__name__, str(e))
+    return _value_signature(v)
+
+def _get_tensor_shape_dtype(ds, k, sample_idx=0):
+        v = ds[sample_idx][k]
+        if not isinstance(v, torch.Tensor):
+            return None
+        return tuple(v.shape), v.dtype

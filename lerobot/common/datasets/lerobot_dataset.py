@@ -31,7 +31,6 @@ from datasets import concatenate_datasets, load_dataset
 from huggingface_hub import HfApi, snapshot_download
 from huggingface_hub.constants import REPOCARD_NAME
 from huggingface_hub.errors import RevisionNotFoundError
-
 from lerobot.common.constants import HF_LEROBOT_HOME
 from lerobot.common.datasets.compute_stats import aggregate_stats, compute_episode_stats
 from lerobot.common.datasets.image_writer import AsyncImageWriter, write_image
@@ -66,6 +65,8 @@ from lerobot.common.datasets.utils import (
     write_episode_stats,
     write_info,
     write_json,
+    _get_key_signature,
+    _get_tensor_shape_dtype,
 )
 from lerobot.common.datasets.video_utils import (
     VideoFrame,
@@ -1258,6 +1259,10 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                 "other datasets."
             )
             self.disabled_features.update(extra_keys)
+        # 2) 추가: 공통 key지만 shape/dtype이 다른 key padding
+        # 기준(dataset 0)의 시그니처
+        self.compute_pad_specs(intersection_features)
+
         self.image_transforms = image_transforms
         self.delta_timestamps = delta_timestamps
         self.angle_to_indices = defaultdict(list)
@@ -1269,12 +1274,14 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         robot_type_to_indices = defaultdict(list)
         for idx, dataset in enumerate(self._datasets):
             robot_type = dataset.meta.robot_type or self.repo_ids[idx]
+            # if robot_type != "panda":
+                # print("not implementing multiple embodiment dataset for separte normalize")
+            # robot_type = "panda"
             robot_type_to_indices[robot_type].append(idx)
 
         def _aggregate_attr(attr: str, indices: list[int]) -> dict[str, dict[str, np.ndarray]]:
             values = [getattr(self._datasets[i].meta, attr) for i in indices]
             return aggregate_stats(values)
-
         if len(robot_type_to_indices) == 1:
             self.stats = aggregate_stats([dataset.meta.stats for dataset in self._datasets])
             self.aug_stats = aggregate_stats([dataset.meta.aug_stats for dataset in self._datasets])
@@ -1411,6 +1418,38 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             },
         }
         return aug, out_info
+
+    def pad_item_inplace(self, item):
+        if not hasattr(self, "pad_specs"):
+            return item
+
+        for k, spec in self.pad_specs.items():
+            if k not in item:
+                continue
+            x = item[k]
+            if not isinstance(x, torch.Tensor):
+                continue
+
+            axis = spec["axis"]
+            target = spec["target"]
+
+            # axis=-1만 지원(원하면 확장 가능)
+            cur = x.shape[axis]
+            if cur == target:
+                continue
+            if cur > target:
+                # 이 경우는 데이터가 더 큰데 target이 작다는 뜻이라, 보통 target을 max로 잡으면 안 발생
+                # 혹시 발생하면 disable or truncate 정책 선택
+                raise ValueError(f"Padding spec target smaller than current for key={k}: cur={cur} target={target}")
+
+            pad_amount = target - cur
+            # torch.nn.functional.pad는 last-dim padding에 (0, pad_amount) 형태
+            import torch.nn.functional as F
+            # F.pad expects pad tuple for last dims: (pad_left, pad_right)
+            x_pad = F.pad(x, (0, pad_amount), mode="constant", value=0)
+            item[k] = x_pad
+
+        return item
     @property
     def repo_id_to_index(self):
         """Return a mapping from dataset repo_id to a dataset index automatically created by this class.
@@ -1493,6 +1532,67 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return self.num_frames
+    
+    def compute_pad_specs(self, intersection_features, sample_idx=0):
+        """
+        Creates:
+        self.pad_specs: dict[key] = {"axis": -1, "target": int}
+        and updates:
+        self.disabled_features for truly incompatible keys.
+        """
+        pad_specs = {}
+        mismatched_disable = set()
+
+        # collect shapes/dtypes across datasets for each key
+        shapes_by_key = defaultdict(list)
+        dtypes_by_key = defaultdict(set)
+
+        for repo_id, ds in zip(self.repo_ids, self._datasets, strict=True):
+            for k in intersection_features:
+                info = _get_tensor_shape_dtype(ds, k, sample_idx=sample_idx)
+                if info is None:
+                    continue
+                shape, dtype = info
+                shapes_by_key[k].append((repo_id, shape))
+                dtypes_by_key[k].add(dtype)
+
+        for k, entries in shapes_by_key.items():
+            # dtype mismatch -> 일단 disable (원하면 promote/cast 규칙도 가능)
+            if len(dtypes_by_key[k]) > 1:
+                mismatched_disable.add(k)
+                logging.warning(f"key '{k}' disabled: dtype mismatch across datasets: {dtypes_by_key[k]}")
+                continue
+
+            # shape 분석: last dim만 다르고 나머지는 동일하면 pad 가능
+            shapes = [sh for _, sh in entries]
+            if len(set(shapes)) == 1:
+                continue  # 모두 동일 -> pad 필요 없음
+
+            rank_set = {len(sh) for sh in shapes}
+            if len(rank_set) != 1:
+                mismatched_disable.add(k)
+                logging.warning(f"key '{k}' disabled: rank mismatch across datasets: {entries}")
+                continue
+
+            rank = next(iter(rank_set))
+            if rank == 0:
+                mismatched_disable.add(k)
+                logging.warning(f"key '{k}' disabled: scalar mismatch (?) {entries}")
+                continue
+
+            # 마지막 축 제외한 prefix가 모두 같은지 확인
+            prefixes = {sh[:-1] for sh in shapes}
+            if len(prefixes) != 1:
+                mismatched_disable.add(k)
+                logging.warning(f"key '{k}' disabled: non-last dims differ: {entries}")
+                continue
+
+            max_last = max(sh[-1] for sh in shapes)
+            pad_specs[k] = {"axis": -1, "target": max_last}
+            logging.warning(f"key '{k}' will be padded on axis -1 to target={max_last}. shapes={entries}")
+
+        self.pad_specs = pad_specs
+        self.disabled_features.update(mismatched_disable)
 
     def _get_motion_dynamics_basis(self, intrinsic_matrix, cam_to_world: np.ndarray):
         """
@@ -1816,7 +1916,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             item["dynamic.augmented_info"] = dynamic_augmented_info
 
         item["dataset_index"] = torch.tensor(dataset_idx)
-
+        item = self.pad_item_inplace(item)
         for data_key in self.disabled_features:
             if data_key in item:
                 del item[data_key]

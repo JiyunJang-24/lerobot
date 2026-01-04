@@ -145,8 +145,13 @@ def train(cfg: TrainPipelineConfig):
     logging.info("Creating policy")
     if isinstance(dataset, MultiLeRobotDataset):
         ds_meta = dataset._datasets[0].meta
-        ds_meta.stats = dataset.stats
-        ds_meta.aug_stats = dataset.aug_stats
+        try:
+            ds_meta.stats = dataset.stats['panda']
+            ds_meta.aug_stats = dataset.aug_stats['panda']
+            print("Not implementing using cross embodiment normalize yet. We use only panda stats")
+        except:
+            ds_meta.stats = dataset.stats
+            ds_meta.aug_stats = dataset.aug_stats
     else:
         ds_meta = dataset.meta
     policy = make_policy(
