@@ -75,12 +75,18 @@ def project_world_point_to_pixel_cam_to_world(
     cam_to_world: np.ndarray,
     p_world: np.ndarray,
     eps: float = 1e-6,
+    realworld: bool = False,
 ):
     """
-    MuJoCo convention:
+    [MuJoCo convention]
       - camera looks along -Z
       - camera +Y is up
     Returns (u,v) in pixel coords (origin: top-left), or None if not projectable.
+
+    [Realworld - Standard OpenCV Convention]
+    - Camera looks along +Z
+    - Camera +Y is down (Image coordinates)
+    - Camera +X is right
     """
     cam_T_world = np.linalg.inv(cam_to_world)
 
@@ -88,15 +94,26 @@ def project_world_point_to_pixel_cam_to_world(
     pc = cam_T_world @ pw
     X, Y, Z = float(pc[0]), float(pc[1]), float(pc[2])
 
-    depth = -Z  # ✅ MuJoCo: in-front -> Z is negative
-    if depth <= eps:
-        return None
+    if realworld:
+        depth = Z
+        if depth <= eps:
+            return None
+    else:
+        depth = -Z
+        if depth <= eps:
+            return None
 
     fx, fy = float(K[0, 0]), float(K[1, 1])
     cx, cy = float(K[0, 2]), float(K[1, 2])
 
-    u = fx * (X / depth) + cx
-    v = cy - fy * (Y / depth)   # ✅ Y up -> v down
+
+    if realworld:
+        u = fx * (X / Z) + cx
+        v = fy * (Y / Z) + cy 
+    else:
+        u = fx * (X / Z) + cx
+        v = cy - fy * (Y / Z)
+    
     return (u, v)
 
 def _extract_eef_world_pos(robot_eef_abs_poses):
@@ -222,6 +239,7 @@ def _make_motion_basis_axis_rgb_tensor_cam_to_world(
         line_thickness: int = 2,
         return_overlay: bool = False,
         overlay_alpha: float = 0.85,
+        realworld: bool = False,
     ):
         """
         Returns:
@@ -296,7 +314,7 @@ def _make_motion_basis_axis_rgb_tensor_cam_to_world(
             ox = oy = None
             if origin_robot and (c2w_np is not None) and (eef_np is not None) and (K_np is not None):
                 p_world = eef_np[b, :3]  # (3,)
-                uv = project_world_point_to_pixel_cam_to_world(K_np, c2w_np, p_world)
+                uv = project_world_point_to_pixel_cam_to_world(K_np, c2w_np, p_worl, realworld=realworld)
                 if uv is not None:
                     u, v = uv
                     ox = int(round(float(u))); oy = int(round(float(v)))
@@ -331,8 +349,10 @@ def _make_motion_basis_axis_rgb_tensor_cam_to_world(
 
             for i in range(3):
                 du = float(basis_np[i, 0])
-                dv = -float(basis_np[i, 1])  # image v-axis flip
-
+                if realworld:
+                    dv = float(basis_np[i, 1]) 
+                else:
+                    dv = -float(basis_np[i, 1])  # image v-axis flip
                 end_xy = (int(round(ox + arrow_len * du)),
                         int(round(oy + arrow_len * dv)))
 

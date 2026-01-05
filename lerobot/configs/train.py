@@ -74,6 +74,7 @@ class TrainPipelineConfig(HubMixin):
     use_dynamics_basis: bool = False
     viz: bool = False
     use_depth: bool = False
+    realworld: bool = False
     def __post_init__(self):
         self.checkpoint_path = None
 
@@ -87,7 +88,6 @@ class TrainPipelineConfig(HubMixin):
             self.policy.pretrained_path = policy_path
         elif self.resume:
             # The entire train config is already loaded, we just need to get the checkpoint dir
-            import pdb; pdb.set_trace()
             config_path = parser.parse_arg("config_path")
             if not config_path:
                 raise ValueError(

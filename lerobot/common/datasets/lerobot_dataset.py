@@ -1214,7 +1214,8 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         sign_augmentation: list[bool] = [False, False, False],
         pretrain_dynamic_backbone: bool = False,
         use_plucker: bool = False,
-        use_dynamics_basis: bool = False
+        use_dynamics_basis: bool = False,
+        realworld: bool = False,
     ):
         super().__init__()
         self.repo_ids = repo_ids
@@ -1262,10 +1263,6 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         self.delta_timestamps = delta_timestamps
         self.angle_to_indices = defaultdict(list)
         self.indices_to_angle = {}
-        for idx, repo_id in enumerate(repo_ids):
-            ang = extract_angle(repo_id)
-            self.angle_to_indices[ang].append(idx)
-            self.indices_to_angle[idx] = ang
         robot_type_to_indices = defaultdict(list)
         for idx, dataset in enumerate(self._datasets):
             robot_type = dataset.meta.robot_type or self.repo_ids[idx]
@@ -1299,7 +1296,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
 
         self.use_plucker = use_plucker
         self.use_dynamics_basis = use_dynamics_basis
-
+        self.realworld = realworld
         # PLUCKER
         if self.use_plucker:
             self.image_size = 256
@@ -1566,6 +1563,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         line_thickness: int = 2,
         return_overlay: bool = False,
         overlay_alpha: float = 0.85,
+        realworld: bool = False,
     ):
         """
         Returns:
@@ -1640,7 +1638,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             ox = oy = None
             if origin_robot and (c2w_np is not None) and (eef_np is not None) and (K_np is not None):
                 p_world = eef_np[b, :3]  # (3,)
-                uv = project_world_point_to_pixel_cam_to_world(K_np, c2w_np, p_world)
+                uv = project_world_point_to_pixel_cam_to_world(K_np, c2w_np, p_world, realworld=realworld)
                 if uv is not None:
                     u, v = uv
                     ox = int(round(float(u))); oy = int(round(float(v)))
@@ -1729,33 +1727,62 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             intrinsic_matrix = item['intrinsic_matrix']
             robot_state = item['observation.state'] #gripper qpos (2), eef pos (3), eef quat (4)
             img = item['observation.image'] # S * C * H * W
-            if self.use_plucker:
-                with torch.no_grad():
-                    plucker_extrinsic_matrix = remove_extrinsic_camera_axis_correction(extrinsic_matrix)
-                    intrinsic_tensor = intrinsic_matrix.unsqueeze(0).expand(img.shape[0], -1, -1)
-                    extrinsic_tensor = plucker_extrinsic_matrix.unsqueeze(0).expand(img.shape[0], -1, -1)
-                    plucker_data = self.plucker_embedder(intrinsic_tensor, extrinsic_tensor)
-                    plucker_tensor = einops.rearrange(plucker_data['plucker'], 's h w c -> s c h w')
-                item['observation.image'] = torch.cat([img, plucker_tensor], dim=1)
 
-            elif self.use_dynamics_basis:
-                with torch.no_grad():
-                    plucker_extrinsic_matrix = remove_extrinsic_camera_axis_correction(extrinsic_matrix)
-                    motion_dynamics_basis = self._get_motion_dynamics_basis(intrinsic_matrix, cam_to_world=plucker_extrinsic_matrix).reshape(-1)
-                    axis_tensor, origin_xy = self._make_motion_basis_axis_rgb_tensor_cam_to_world(
-                        rgb_tensor=img,                  # (B, 3,H,W)
-                        motion_dynamics_basis=motion_dynamics_basis,
-                        cam_to_world=plucker_extrinsic_matrix,                  # cam_pose = cam_to_world (고정)
-                        intrinsic_matrix=intrinsic_matrix,
-                        robot_eef_abs_poses=robot_state[:, -7:],  # eef pose (B, 7)
-                        origin_robot=True,
-                        origin_fallback="pp",
-                        arrow_len=60,
-                        return_overlay=False,
-                    ) # (B, 3, H, W)
-                item['observation.image'] = torch.cat([img, axis_tensor], dim=1)
-                # save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
-                # save_rgb_image(item['observation.image'][0], "tmp_dir/robot_image.png")
+            if self.realworld:
+                if self.use_plucker:
+                    with torch.no_grad():
+                        intrinsic_tensor = intrinsic_matrix.unsqueeze(0).expand(img.shape[0], -1, -1)
+                        extrinsic_tensor = extrinsic_matrix.unsqueeze(0).expand(img.shape[0], -1, -1)
+                        plucker_data = self.plucker_embedder(intrinsic_tensor, extrinsic_tensor)
+                        plucker_tensor = einops.rearrange(plucker_data['plucker'], 's h w c -> s c h w')
+                    item['observation.image'] = torch.cat([img, plucker_tensor], dim=1)
+
+                elif self.use_dynamics_basis:
+                    with torch.no_grad():
+                        motion_dynamics_basis = self._get_motion_dynamics_basis(intrinsic_matrix, cam_to_world=extrinsic_matrix).reshape(-1)
+                        axis_tensor, origin_xy = self._make_motion_basis_axis_rgb_tensor_cam_to_world(
+                            rgb_tensor=img,                  # (B, 3,H,W)
+                            motion_dynamics_basis=motion_dynamics_basis,
+                            cam_to_world=extrinsic_matrix,                  # cam_pose = cam_to_world (고정)
+                            intrinsic_matrix=intrinsic_matrix,
+                            robot_eef_abs_poses=robot_state[:, :7],  # eef pose (B, 7)
+                            origin_robot=True,
+                            origin_fallback="pp",
+                            arrow_len=60,
+                            return_overlay=True,
+                            realworld=True,
+                        ) # (B, 3, H, W)
+                    # save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
+                    # save_rgb_image(item['observation.image'][0], "tmp_dir/robot_image.png")
+                    item['observation.image'] = torch.cat([img, axis_tensor], dim=1)
+            else:
+                if self.use_plucker:
+                    with torch.no_grad():
+                        plucker_extrinsic_matrix = remove_extrinsic_camera_axis_correction(extrinsic_matrix)
+                        intrinsic_tensor = intrinsic_matrix.unsqueeze(0).expand(img.shape[0], -1, -1)
+                        extrinsic_tensor = plucker_extrinsic_matrix.unsqueeze(0).expand(img.shape[0], -1, -1)
+                        plucker_data = self.plucker_embedder(intrinsic_tensor, extrinsic_tensor)
+                        plucker_tensor = einops.rearrange(plucker_data['plucker'], 's h w c -> s c h w')
+                    item['observation.image'] = torch.cat([img, plucker_tensor], dim=1)
+                
+                elif self.use_dynamics_basis:
+                    with torch.no_grad():
+                        plucker_extrinsic_matrix = remove_extrinsic_camera_axis_correction(extrinsic_matrix)
+                        motion_dynamics_basis = self._get_motion_dynamics_basis(intrinsic_matrix, cam_to_world=plucker_extrinsic_matrix).reshape(-1)
+                        axis_tensor, origin_xy = self._make_motion_basis_axis_rgb_tensor_cam_to_world(
+                            rgb_tensor=img,                  # (B, 3,H,W)
+                            motion_dynamics_basis=motion_dynamics_basis,
+                            cam_to_world=plucker_extrinsic_matrix,                  # cam_pose = cam_to_world (고정)
+                            intrinsic_matrix=intrinsic_matrix,
+                            robot_eef_abs_poses=robot_state[:, -7:],  # eef pose (B, 7)
+                            origin_robot=True,
+                            origin_fallback="pp",
+                            arrow_len=60,  
+                            return_overlay=False,
+                        ) # (B, 3, H, W)
+                    # save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
+                    # save_rgb_image(item['observation.image'][0], "tmp_dir/robot_image.png")
+                    item['observation.image'] = torch.cat([img, axis_tensor], dim=1)                
                 
         except Exception as e:
             print(e)
