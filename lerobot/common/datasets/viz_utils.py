@@ -151,34 +151,6 @@ def save_rgb_image(rgb_b3hw: torch.Tensor, path: str):
     cv2.imwrite(path, img_bgr)
 
 
-def save_rgb_image(rgb_b3hw: torch.Tensor, path: str):
-    """
-    Save a normalized RGB tensor as an 8-bit PNG/JPG.
-
-    Args:
-        rgb_b3hw: torch.Tensor (B,3,H,W) or (3,H,W), normalized in [0,1]
-        path: output file path (e.g., "/tmp/img.png")
-    """
-    x = rgb_b3hw.detach().float().cpu()
-
-    # allow (3,H,W) or (B,3,H,W)
-    if x.ndim == 3:
-        x = x.unsqueeze(0)
-    if x.ndim != 4 or x.shape[1] != 3:
-        raise ValueError(f"Expected (B,3,H,W) or (3,H,W), got {tuple(x.shape)}")
-
-    os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
-
-    x0 = x[0]  # (3,H,W)
-    x0 = x0.clamp(0.0, 1.0)
-
-    # (3,H,W) -> (H,W,3) uint8
-    img_hwc = (x0.permute(1, 2, 0).numpy() * 255.0 + 0.5).astype(np.uint8)
-
-    # save (cv2 expects BGR)
-    img_bgr = cv2.cvtColor(img_hwc, cv2.COLOR_RGB2BGR)
-    cv2.imwrite(path, img_bgr)
-
 def _get_motion_dynamics_basis(intrinsic_matrix, cam_to_world: np.ndarray):
         """
         cam_to_world: (4,4) camera pose matrix from pose_set (agentview).
