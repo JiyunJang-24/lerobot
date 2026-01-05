@@ -36,7 +36,6 @@ def create_stats_buffers(
             `nn.Parameters` set to `requires_grad=False`, suitable to not be updated during backpropagation.
     """
     stats_buffers = {}
-
     for key, ft in features.items():
         norm_mode = norm_map.get(ft.type, NormalizationMode.IDENTITY)
         if norm_mode is NormalizationMode.IDENTITY:
