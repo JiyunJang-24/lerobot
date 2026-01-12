@@ -50,6 +50,7 @@ def draw_clipped_arrow_fixed_head(
     dx = float(x1 - x0)
     dy = float(y1 - y0)
     L = (dx*dx + dy*dy) ** 0.5
+    # L = 1.0
     if L < 1e-6:
         cv2.circle(img_bgr, (x0, y0), max(1, thickness), color, -1)
         return True, (x0, y0), (x1, y1)
@@ -392,3 +393,241 @@ def _make_motion_basis_axis_rgb_tensor_cam_to_world(
             return axis_tensor, origins
         else:
             return axis_tensor[0], origins[0]
+
+
+
+def _rescale_make_motion_basis_axis_rgb_tensor_cam_to_world(
+        rgb_tensor: torch.Tensor,                  # (3,H,W) or (B,3,H,W) in [0,1]
+        intrinsic_matrix: np.ndarray | torch.Tensor | None = None,  # (3,3) shared
+        cam_to_world: np.ndarray | torch.Tensor | None = None,      # (4,4) shared
+        robot_eef_abs_poses: np.ndarray | torch.Tensor | None = None,  # (7,) or (B,7)
+        origin_robot: bool = False,
+        origin_fallback: str = "pp",               # "pp" or "center"
+        line_thickness: int = 2,
+        arrow_len: int = 60,
+        return_overlay: bool = False,
+        overlay_alpha: float = 0.85,
+    ):
+        """
+        Returns:
+        - unbatched input (3,H,W): (axis_tensor: (3,H,W), origin_xy: (ox,oy))
+        - batched input (B,3,H,W): (axis_tensor: (B,3,H,W), origins: List[(ox,oy)])
+        """
+
+        def to_numpy(x):
+            if x is None:
+                return None
+            if isinstance(x, torch.Tensor):
+                return x.detach().cpu().numpy()
+            return np.asarray(x)
+
+        # --- normalize rgb to batched ---
+        input_batched = (rgb_tensor.ndim == 4)
+        if rgb_tensor.ndim == 3:
+            rgb_b = rgb_tensor.unsqueeze(0)  # (1,3,H,W)
+        elif rgb_tensor.ndim == 4:
+            rgb_b = rgb_tensor              # (B,3,H,W)
+        else:
+            raise ValueError(f"rgb_tensor must be (3,H,W) or (B,3,H,W), got {tuple(rgb_tensor.shape)}")
+
+        B, C, H, W = rgb_b.shape
+        if C < 3:
+            raise ValueError(f"rgb_tensor must have at least 3 channels, got C={C}")
+
+        # --- shared K, c2w as numpy (for projection) ---
+        K_np = to_numpy(intrinsic_matrix) if intrinsic_matrix is not None else None
+        c2w_np = to_numpy(cam_to_world) if cam_to_world is not None else None
+
+        if origin_robot:
+            if K_np is None or c2w_np is None:
+                # origin_robot=True인데 K/c2w가 없으면 투영 불가 -> fallback으로 처리
+                pass
+            else:
+                if K_np.shape != (3, 3):
+                    raise ValueError(f"intrinsic_matrix must be (3,3), got {K_np.shape}")
+                if c2w_np.shape != (4, 4):
+                    raise ValueError(f"cam_to_world must be (4,4), got {c2w_np.shape}")
+
+        # --- eef poses ---
+        eef_np = None
+        if robot_eef_abs_poses is not None:
+            eef_np = to_numpy(robot_eef_abs_poses)
+            # allow (7,) or (B,7)
+            if eef_np.ndim == 1:
+                if eef_np.shape[0] != 7:
+                    raise ValueError(f"robot_eef_abs_poses must be (7,) got {eef_np.shape}")
+                eef_np = np.broadcast_to(eef_np[None, :], (B, 7))
+            elif eef_np.ndim == 2:
+                if eef_np.shape != (B, 7):
+                    raise ValueError(f"robot_eef_abs_poses must be (B,7) got {eef_np.shape}, expected {(B,7)}")
+            else:
+                raise ValueError(f"robot_eef_abs_poses must be (7,) or (B,7), got ndim={eef_np.ndim}")
+
+        axis_list = []
+        origins = []
+
+        for b in range(B):
+            rgb_i = rgb_b[b]
+            H_i, W_i = int(rgb_i.shape[1]), int(rgb_i.shape[2])
+
+            # 1) origin from EEF projection if available
+            ox = oy = None
+            if origin_robot and (c2w_np is not None) and (eef_np is not None) and (K_np is not None):
+                p_world = eef_np[b, :3]  # (3,)
+                uv = project_world_point_to_pixel_cam_to_world(K_np, c2w_np, p_world)
+                if uv is not None:
+                    u, v = uv
+                    ox = int(round(float(u))); oy = int(round(float(v)))
+                    ox = max(0, min(W_i - 1, ox))
+                    oy = max(0, min(H_i - 1, oy))
+
+            # 2) fallback origin
+            if ox is None or oy is None:
+                if origin_fallback == "pp":
+                    if K_np is None:
+                        ox, oy = W_i // 2, H_i // 2
+                    else:
+                        ox, oy = int(round(float(K_np[0, 2]))), int(round(float(K_np[1, 2])))
+                        ox = max(0, min(W_i - 1, ox))
+                        oy = max(0, min(H_i - 1, oy))
+                elif origin_fallback == "center":
+                    ox, oy = W_i // 2, H_i // 2
+                else:
+                    raise ValueError("origin_fallback must be 'pp' or 'center'")
+
+            # draw base
+            if return_overlay:
+                base_rgb = (rgb_i[:3].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
+            else:
+                base_rgb = np.zeros((H_i, W_i, 3), dtype=np.uint8)
+
+            img_bgr = cv2.cvtColor(base_rgb, cv2.COLOR_RGB2BGR)
+
+            colors = [(0, 0, 255), (0, 255, 0), (255, 0, 0)]  # BGR: x=red y=green z=blue
+            origin_xy = (ox, oy)
+            cv2.circle(img_bgr, origin_xy, 3, (255, 255, 255), -1)
+
+            axis_phys_len_m = 0.20  # 10cm가 action 단위면 이렇게 (원하는 값으로)
+            arrow_len_min, arrow_len_max = 1, 1000
+            axis_len_list = [arrow_len, arrow_len, arrow_len]
+            basis_draw = None
+            import pdb; pdb.set_trace()
+            if origin_robot and (c2w_np is not None) and (eef_np is not None) and (K_np is not None):
+                p_world = eef_np[b, :3]
+                basis_j, scale_px_per_m = motion_basis_and_scale_jacobian(K_np, c2w_np, p_world)
+
+                # 방향도 Jacobian 기반으로 교체하는 걸 추천 (스케일과 일관)
+                basis_draw = basis_j
+
+                axis_len_list = []
+                for i in range(3):
+                    Lpx = int(round(float(scale_px_per_m[i]) * axis_phys_len_m))
+                    Lpx = max(arrow_len_min, min(arrow_len_max, Lpx))
+                    axis_len_list.append(Lpx)
+
+            for i in range(3):
+                du = float(basis_draw[i, 0])
+                dv = -float(basis_draw[i, 1])  # image v-axis flip
+                axis_len = axis_len_list[i]
+                end_xy = (int(round(ox + axis_len * du)),
+                        int(round(oy + axis_len * dv)))
+
+                draw_clipped_arrow_fixed_head(
+                    img_bgr,
+                    origin_xy,
+                    end_xy,
+                    colors[i],
+                    thickness=line_thickness,
+                    head_len_px=8,
+                    head_w_px=6,
+                )
+
+            out_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)  # uint8
+
+            if return_overlay:
+                rgb_u8 = (rgb_i[:3].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
+                out_rgb = (overlay_alpha * out_rgb + (1.0 - overlay_alpha) * rgb_u8).astype(np.uint8)
+
+            axis_tensor_i = torch.from_numpy(out_rgb).float().permute(2, 0, 1) / 255.0
+            axis_tensor_i = axis_tensor_i.to(device=rgb_tensor.device)
+
+            axis_list.append(axis_tensor_i)
+            origins.append((ox, oy))
+
+        axis_tensor = torch.stack(axis_list, dim=0)  # (B,3,H,W)
+
+        if input_batched:
+            return axis_tensor, origins
+        else:
+            return axis_tensor[0], origins[0]
+
+def inv_T(c2w: np.ndarray) -> np.ndarray:
+    R = c2w[:3, :3]
+    t = c2w[:3, 3]
+    w2c = np.eye(4, dtype=np.float32)
+    w2c[:3, :3] = R.T
+    w2c[:3, 3]  = -R.T @ t
+    return w2c
+
+def motion_basis_and_scale_jacobian(
+    K: np.ndarray,            # (3,3)
+    cam_to_world: np.ndarray, # (4,4) c2w = T_{w<-c} (MuJoCo/OpenGL camera frame)
+    p_world: np.ndarray,      # (3,) EEF world position
+    eps: float = 1e-8,
+):
+    """
+    Returns:
+      basis_uv: (3,2) unit 2D directions, with v-axis POSITIVE UP (so your dv=-basis[:,1] keeps working)
+      scale_px_per_m: (3,) magnitudes in px/m for each world axis at p_world
+    """
+    K = np.asarray(K, dtype=np.float32)
+    c2w = np.asarray(cam_to_world, dtype=np.float32)
+    Pw = np.asarray(p_world, dtype=np.float32).reshape(3)
+
+    fx, fy = float(K[0, 0]), float(K[1, 1])
+
+    # --- camera axis correction: MuJoCo/OpenGL -> OpenCV pinhole (x right, y down, z forward) ---
+    C = np.diag([1.0, -1.0, -1.0]).astype(np.float32)
+
+    # EEF point in camera coordinates (MuJoCo camera frame)
+    w2c = inv_T(c2w)
+    Pc_mj = (w2c @ np.array([Pw[0], Pw[1], Pw[2], 1.0], dtype=np.float32))[:3]
+
+    # Convert to OpenCV camera frame
+    Pc = C @ Pc_mj
+    X, Y, Z = float(Pc[0]), float(Pc[1]), float(Pc[2])
+
+    basis_uv = np.zeros((3, 2), dtype=np.float32)
+    scale_px_per_m = np.zeros((3,), dtype=np.float32)
+
+    if Z < eps:
+        return basis_uv, scale_px_per_m
+
+    # Jacobian at (X,Y,Z) in OpenCV camera frame (v positive DOWN)
+    J = np.array([
+        [fx / Z, 0.0,     -fx * X / (Z * Z)],
+        [0.0,    fy / Z,  -fy * Y / (Z * Z)],
+    ], dtype=np.float32)  # (2,3)
+
+    # R_cw in MuJoCo camera frame
+    R_cw_mj = c2w[:3, :3].T
+
+    dirs_w = np.eye(3, dtype=np.float32)  # +X,+Y,+Z world
+
+    for i in range(3):
+        d_w = dirs_w[i]
+        d_c_mj = R_cw_mj @ d_w            # direction in MuJoCo camera frame
+        d_c = C @ d_c_mj                  # direction in OpenCV camera frame
+
+        g_down = J @ d_c                  # (du, dv_down) in pixels per meter
+        mag = float(np.linalg.norm(g_down))
+        if mag < eps:
+            continue
+
+        # convert to your convention: v positive UP (so draw uses dv=-basis[:,1])
+        g_up = np.array([g_down[0], -g_down[1]], dtype=np.float32)
+
+        basis_uv[i] = g_up / (mag + eps)
+        scale_px_per_m[i] = mag
+
+    return basis_uv, scale_px_per_m
