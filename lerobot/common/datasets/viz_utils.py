@@ -511,7 +511,6 @@ def _rescale_make_motion_basis_axis_rgb_tensor_cam_to_world(
             arrow_len_min, arrow_len_max = 1, 1000
             axis_len_list = [arrow_len, arrow_len, arrow_len]
             basis_draw = None
-            import pdb; pdb.set_trace()
             if origin_robot and (c2w_np is not None) and (eef_np is not None) and (K_np is not None):
                 p_world = eef_np[b, :3]
                 basis_j, scale_px_per_m = motion_basis_and_scale_jacobian(K_np, c2w_np, p_world)

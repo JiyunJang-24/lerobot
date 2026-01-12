@@ -79,6 +79,9 @@ from lerobot.common.datasets.camera_utils import (
     PluckerEmbedder,
     remove_extrinsic_camera_axis_correction
 )
+from lerobot.common.datasets.viz_utils import (
+    _rescale_make_motion_basis_axis_rgb_tensor_cam_to_world,
+)
 from lerobot.common.robot_devices.robots.utils import Robot
 from lerobot.common.datasets.viz_utils import (
     draw_clipped_arrow_fixed_head, 
@@ -1215,7 +1218,8 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         sign_augmentation: list[bool] = [False, False, False],
         pretrain_dynamic_backbone: bool = False,
         use_plucker: bool = False,
-        use_dynamics_basis: bool = False
+        use_dynamics_basis: bool = False,
+        apply_basis_scale: bool = False,
     ):
         super().__init__()
         self.repo_ids = repo_ids
@@ -1313,7 +1317,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             self.plucker_embedder = PluckerEmbedder(img_size=self.image_size, device='cpu')
         else:
             self.plucker_embedder = None
-
+        self.apply_basis_scale = apply_basis_scale
     def augment_action_sequence(
         self,
         action: torch.Tensor,          # (T, 7)
@@ -1841,20 +1845,32 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             elif self.use_dynamics_basis:
                 with torch.no_grad():
                     plucker_extrinsic_matrix = remove_extrinsic_camera_axis_correction(extrinsic_matrix)
-                    motion_dynamics_basis = self._get_motion_dynamics_basis(intrinsic_matrix, cam_to_world=plucker_extrinsic_matrix).reshape(-1)
-                    axis_tensor, origin_xy = self._make_motion_basis_axis_rgb_tensor_cam_to_world(
-                        rgb_tensor=img,                  # (B, 3,H,W)
-                        motion_dynamics_basis=motion_dynamics_basis,
-                        cam_to_world=plucker_extrinsic_matrix,                  # cam_pose = cam_to_world (고정)
-                        intrinsic_matrix=intrinsic_matrix,
-                        robot_eef_abs_poses=robot_state[:, -7:],  # eef pose (B, 7)
-                        origin_robot=True,
-                        origin_fallback="pp",
-                        arrow_len=60,
-                        return_overlay=False,
-                    ) # (B, 3, H, W)
+                    if self.apply_basis_scale:
+                        axis_tensor, origin_xy = _rescale_make_motion_basis_axis_rgb_tensor_cam_to_world(
+                            rgb_tensor=img,                  # (B, 3,H,W)
+                            cam_to_world=plucker_extrinsic_matrix,                  # cam_pose = cam_to_world (고정)
+                            intrinsic_matrix=intrinsic_matrix,
+                            robot_eef_abs_poses=robot_state[:, -7:],  # eef pose (B, 7)
+                            origin_robot=True,
+                            origin_fallback="pp",
+                            arrow_len=60,
+                            return_overlay=True,
+                        )
+                    else:
+                        motion_dynamics_basis = self._get_motion_dynamics_basis(intrinsic_matrix, cam_to_world=plucker_extrinsic_matrix).reshape(-1)
+                        axis_tensor, origin_xy = self._make_motion_basis_axis_rgb_tensor_cam_to_world(
+                            rgb_tensor=img,                  # (B, 3,H,W)
+                            motion_dynamics_basis=motion_dynamics_basis,
+                            cam_to_world=plucker_extrinsic_matrix,                  # cam_pose = cam_to_world (고정)
+                            intrinsic_matrix=intrinsic_matrix,
+                            robot_eef_abs_poses=robot_state[:, -7:],  # eef pose (B, 7)
+                            origin_robot=True,
+                            origin_fallback="pp",
+                            arrow_len=60,
+                            return_overlay=False,
+                        ) # (B, 3, H, W)
                 item['observation.image'] = torch.cat([img, axis_tensor], dim=1)
-                # save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
+                save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
                 # save_rgb_image(item['observation.image'][0], "tmp_dir/robot_image.png")
                 
         except Exception as e:

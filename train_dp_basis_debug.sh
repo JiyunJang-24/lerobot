@@ -32,5 +32,6 @@ CUDA_VISIBLE_DEVICES=3 python lerobot/scripts/train.py \
   --wandb.enable=false \
   --num_workers=0 \
   --use_plucker=false \
-  --use_dynamics_basis=true
+  --use_dynamics_basis=true \
+  --apply_basis_scale=true
 # Training checkpoints will be saved under: lerobot/outputs/train/202x-xx-xx/xx-xx-xx_diffusion
