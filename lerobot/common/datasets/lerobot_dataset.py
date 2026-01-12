@@ -1854,7 +1854,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                             origin_robot=True,
                             origin_fallback="pp",
                             arrow_len=60,
-                            return_overlay=True,
+                            return_overlay=False,
                         )
                     else:
                         motion_dynamics_basis = self._get_motion_dynamics_basis(intrinsic_matrix, cam_to_world=plucker_extrinsic_matrix).reshape(-1)
@@ -1870,7 +1870,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                             return_overlay=False,
                         ) # (B, 3, H, W)
                 item['observation.image'] = torch.cat([img, axis_tensor], dim=1)
-                save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
+                # save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
                 # save_rgb_image(item['observation.image'][0], "tmp_dir/robot_image.png")
                 
         except Exception as e:
