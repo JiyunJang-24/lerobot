@@ -378,6 +378,7 @@ class DiffusionModel(nn.Module):
         if self.config.use_robot_state:
             global_cond_feats.append(batch[OBS_ROBOT])
         # Extract image features.
+
         if self.config.image_features:
             if self.config.use_separate_rgb_encoder_per_camera:
                 # Combine batch and sequence dims while rearranging to make the camera index dimension first.
@@ -590,7 +591,6 @@ class DiffusionModel(nn.Module):
         horizon = batch["action"].shape[1]
         assert horizon == self.config.horizon
         assert n_obs_steps == self.config.n_obs_steps
-
         # Encode image features and concatenate them all together along with the state vector.
         global_cond = self._prepare_global_conditioning(batch)  # (B, global_cond_dim)
 

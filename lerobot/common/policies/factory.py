@@ -118,7 +118,7 @@ def make_policy(
     kwargs = {}
     if ds_meta is not None:
         if libero_dataset:
-            features = libero_to_policy_features(ds_meta.features)
+            features = libero_to_policy_features(ds_meta.features, use_wrist_image=cfg.use_wrist_image)
         else:
             features = dataset_to_policy_features(ds_meta.features)
         kwargs["dataset_stats"] = ds_meta.stats

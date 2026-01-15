@@ -429,14 +429,17 @@ def dataset_to_policy_features(features: dict[str, dict]) -> dict[str, PolicyFea
     return policy_features
 
 
-def libero_to_policy_features(features: dict[str, dict]) -> dict[str, PolicyFeature]:
+def libero_to_policy_features(features: dict[str, dict], use_wrist_image: bool = False) -> dict[str, PolicyFeature]:
     # TODO(aliberts): Implement "type" in dataset features and simplify this
     policy_features = {}
     for key, ft in features.items():
         shape = ft["shape"]
-        if key == "observation.wrist_image":    # 不需要wrist image
+        if use_wrist_image==False and key == "observation.wrist_image":    # 不需要wrist image
+            print("Skipping wrist image as per configuration.")
             continue
-        
+        elif use_wrist_image==True and key == "observation.wrist_image":  # 需要wrist image
+            print("Including wrist image as per configuration.")
+
         if key == "observation.environment_state":  # 不给他看环境的state
             continue
         

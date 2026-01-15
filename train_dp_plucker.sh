@@ -39,7 +39,7 @@ export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH}"
 #   --use_dynamics_basis=false
 
 CUDA_VISIBLE_DEVICES=1 python lerobot/scripts/train.py \
-  --dataset.repo_id=[cam_info_10_10_0.0_0.0/v-1.000-1.000_num1,cam_info_ur5e_10_10_22.5_22.5/v-1.000-1.000_num1,cam_info_10_10_45.0_45.0/v-1.000-1.000_num1,cam_info_ur5e_10_10_337.5_337.5/v-1.000-1.000_num1,cam_info_10_10_315.0_315.0/v-1.000-1.000_num1] \
+  --dataset.repo_id=[DP_cam_info_10_10_0.0_0.0/v-1.000-1.000_num1,DP_cam_info_10_10_15.0_15.0/v-1.000-1.000_num1,DP_cam_info_10_10_30.0_30.0/v-1.000-1.000_num1,DP_cam_info_10_10_345.0_345.0/v-1.000-1.000_num1,DP_cam_info_10_10_330.0_330.0/v-1.000-1.000_num1] \
   --dataset.root=/data1/local/shortcut-learning-in-grps/dataset_git/libero_spatial_no_noops_island_1_lerobot \
   --dataset.image_transforms.enable=false \
   --dataset.use_imagenet_stats=false \
@@ -60,7 +60,7 @@ CUDA_VISIBLE_DEVICES=1 python lerobot/scripts/train.py \
   --wandb.project=libero_DP \
   --wandb.disable_artifact=true \
   --wandb.entity=DynamicVLA \
-  --job_name=DP_plucker_panda_0_45_315_ur5_22.5_337.5_task_0 \
+  --job_name=DP_spatial_plucker_angle_from_0_15_30_345_330 \
   --use_plucker=true \
   --use_dynamics_basis=false
 # Training checkpoints will be saved under: lerobot/outputs/train/202x-xx-xx/xx-xx-xx_diffusion

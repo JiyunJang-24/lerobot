@@ -1856,6 +1856,24 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                             arrow_len=60,
                             return_overlay=False,
                         )
+                        try:
+                            wrist_img = item['observation.wrist_image']
+                            wrist_intrinsic_matrix = item['wrist_intrinsic_matrix']
+                            wrist_extrinsic_matrix = item['wrist_extrinsic_matrix']
+                            wrist_plucker_extrinsic_matrix = remove_extrinsic_camera_axis_correction(wrist_extrinsic_matrix)
+                            wrist_axis_tensor, wrist_origin_xy = _rescale_make_motion_basis_axis_rgb_tensor_cam_to_world(
+                                rgb_tensor=wrist_img,
+                                cam_to_world=wrist_plucker_extrinsic_matrix,
+                                intrinsic_matrix=wrist_intrinsic_matrix,
+                                robot_eef_abs_poses=robot_state[:, -7:],
+                                origin_robot=True,
+                                origin_fallback="pp",
+                                arrow_len=60,
+                                return_overlay=False,
+                            )
+                            item['observation.wrist_image'] = torch.cat([wrist_img, wrist_axis_tensor], dim=1)
+                        except:
+                            pass
                     else:
                         motion_dynamics_basis = self._get_motion_dynamics_basis(intrinsic_matrix, cam_to_world=plucker_extrinsic_matrix).reshape(-1)
                         axis_tensor, origin_xy = self._make_motion_basis_axis_rgb_tensor_cam_to_world(
