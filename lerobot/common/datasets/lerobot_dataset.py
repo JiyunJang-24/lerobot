@@ -81,6 +81,7 @@ from lerobot.common.datasets.camera_utils import (
 )
 from lerobot.common.datasets.viz_utils import (
     _rescale_make_motion_basis_axis_rgb_tensor_cam_to_world,
+    _make_motion_basis_wrist_axis_rgb_tensor_cam_to_world,
 )
 from lerobot.common.robot_devices.robots.utils import Robot
 from lerobot.common.datasets.viz_utils import (
@@ -1871,6 +1872,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                                 arrow_len=60,
                                 return_overlay=False,
                             )
+                            # save_rgb_image(wrist_axis_tensor[0], "tmp_dir/wrist_scaled_axis_tensor.png")
                             item['observation.wrist_image'] = torch.cat([wrist_img, wrist_axis_tensor], dim=1)
                         except:
                             pass
@@ -1887,8 +1889,27 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                             arrow_len=60,
                             return_overlay=False,
                         ) # (B, 3, H, W)
+                        try:
+                            wrist_img = item['observation.wrist_image']
+                            wrist_intrinsic_matrix = item['wrist_intrinsic_matrix']
+                            wrist_extrinsic_matrix = item['wrist_extrinsic_matrix']
+                            wrist_plucker_extrinsic_matrix = remove_extrinsic_camera_axis_correction(wrist_extrinsic_matrix)
+                            wrist_axis_tensor, wrist_origin_xy = _make_motion_basis_wrist_axis_rgb_tensor_cam_to_world(
+                                rgb_tensor=wrist_img,
+                                cam_to_world=wrist_plucker_extrinsic_matrix,
+                                intrinsic_matrix=wrist_intrinsic_matrix,
+                                robot_eef_abs_poses=robot_state[:, -7:],
+                                origin_robot=True,
+                                origin_fallback="pp",
+                                arrow_len=60,
+                                return_overlay=False,
+                            )
+                            # save_rgb_image(wrist_axis_tensor[0], "tmp_dir/wrist_non_scaled_axis_tensor.png")
+                            item['observation.wrist_image'] = torch.cat([wrist_img, wrist_axis_tensor], dim=1)
+                        except:
+                            pass
                 item['observation.image'] = torch.cat([img, axis_tensor], dim=1)
-                # save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
+                save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
                 # save_rgb_image(item['observation.image'][0], "tmp_dir/robot_image.png")
                 
         except Exception as e:

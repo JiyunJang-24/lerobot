@@ -507,7 +507,7 @@ def _rescale_make_motion_basis_axis_rgb_tensor_cam_to_world(
             origin_xy = (ox, oy)
             cv2.circle(img_bgr, origin_xy, 3, (255, 255, 255), -1)
 
-            axis_phys_len_m = 0.20  # 10cm가 action 단위면 이렇게 (원하는 값으로)
+            axis_phys_len_m = 0.10  # 10cm가 action 단위면 이렇게 (원하는 값으로)
             arrow_len_min, arrow_len_max = 1, 1000
             axis_len_list = [arrow_len, arrow_len, arrow_len]
             basis_draw = None
@@ -630,3 +630,182 @@ def motion_basis_and_scale_jacobian(
         scale_px_per_m[i] = mag
 
     return basis_uv, scale_px_per_m
+
+
+def _basis_from_local_projection(K_np, c2w_np, p_world, eps=0.02):
+    """
+    Returns (3,2) basis in pixel coords (du,dv), normalized.
+    """
+    uv0 = project_world_point_to_pixel_cam_to_world(K_np, c2w_np, p_world)
+    if uv0 is None:
+        return None
+
+    uv0 = np.array(uv0, dtype=np.float32)
+    basis = np.zeros((3, 2), dtype=np.float32)
+
+    for i in range(3):
+        dp = np.zeros(3, dtype=np.float32)
+        dp[i] = eps  # +x, +y, +z in world/base frame
+        uvi = project_world_point_to_pixel_cam_to_world(K_np, c2w_np, p_world + dp)
+        if uvi is None:
+            basis[i] = 0
+            continue
+
+        duv = np.array(uvi, dtype=np.float32) - uv0
+        n = np.linalg.norm(duv) + 1e-6
+        basis[i] = duv / n
+
+    return basis
+
+
+
+def _make_motion_basis_wrist_axis_rgb_tensor_cam_to_world(
+        rgb_tensor: torch.Tensor,                  # (3,H,W) or (B,3,H,W) in [0,1]
+        intrinsic_matrix: np.ndarray | torch.Tensor | None = None,  # (3,3) shared
+        cam_to_world: np.ndarray | torch.Tensor | None = None,      # (4,4) shared
+        robot_eef_abs_poses: np.ndarray | torch.Tensor | None = None,  # (7,) or (B,7)
+        origin_robot: bool = False,
+        origin_fallback: str = "pp",               # "pp" or "center"
+        arrow_len: int = 60,
+        line_thickness: int = 2,
+        return_overlay: bool = False,
+        overlay_alpha: float = 0.85,
+    ):
+        """
+        Returns:
+        - unbatched input (3,H,W): (axis_tensor: (3,H,W), origin_xy: (ox,oy))
+        - batched input (B,3,H,W): (axis_tensor: (B,3,H,W), origins: List[(ox,oy)])
+        """
+
+        def to_numpy(x):
+            if x is None:
+                return None
+            if isinstance(x, torch.Tensor):
+                return x.detach().cpu().numpy()
+            return np.asarray(x)
+
+        # --- normalize rgb to batched ---
+        input_batched = (rgb_tensor.ndim == 4)
+        if rgb_tensor.ndim == 3:
+            rgb_b = rgb_tensor.unsqueeze(0)  # (1,3,H,W)
+        elif rgb_tensor.ndim == 4:
+            rgb_b = rgb_tensor              # (B,3,H,W)
+        else:
+            raise ValueError(f"rgb_tensor must be (3,H,W) or (B,3,H,W), got {tuple(rgb_tensor.shape)}")
+
+        B, C, H, W = rgb_b.shape
+        if C < 3:
+            raise ValueError(f"rgb_tensor must have at least 3 channels, got C={C}")
+
+        # --- shared K, c2w as numpy (for projection) ---
+        K_np = to_numpy(intrinsic_matrix) if intrinsic_matrix is not None else None
+        c2w_np = to_numpy(cam_to_world) if cam_to_world is not None else None
+
+        if origin_robot:
+            if K_np is None or c2w_np is None:
+                # origin_robot=True인데 K/c2w가 없으면 투영 불가 -> fallback으로 처리
+                pass
+            else:
+                if K_np.shape != (3, 3):
+                    raise ValueError(f"intrinsic_matrix must be (3,3), got {K_np.shape}")
+                if c2w_np.shape != (4, 4):
+                    raise ValueError(f"cam_to_world must be (4,4), got {c2w_np.shape}")
+
+        # --- eef poses normalize ---
+        eef_np = None
+        if robot_eef_abs_poses is not None:
+            eef_np = to_numpy(robot_eef_abs_poses)
+            # allow (7,) or (B,7)
+            if eef_np.ndim == 1:
+                if eef_np.shape[0] != 7:
+                    raise ValueError(f"robot_eef_abs_poses must be (7,) got {eef_np.shape}")
+                eef_np = np.broadcast_to(eef_np[None, :], (B, 7))
+            elif eef_np.ndim == 2:
+                if eef_np.shape != (B, 7):
+                    raise ValueError(f"robot_eef_abs_poses must be (B,7) got {eef_np.shape}, expected {(B,7)}")
+            else:
+                raise ValueError(f"robot_eef_abs_poses must be (7,) or (B,7), got ndim={eef_np.ndim}")
+
+        axis_list = []
+        origins = []
+
+        for b in range(B):
+            rgb_i = rgb_b[b]
+            H_i, W_i = int(rgb_i.shape[1]), int(rgb_i.shape[2])
+
+            # 1) origin from EEF projection if available
+            ox = oy = None
+            if origin_robot and (c2w_np is not None) and (eef_np is not None) and (K_np is not None):
+                p_world = eef_np[b, :3]  # (3,)
+                uv = project_world_point_to_pixel_cam_to_world(K_np, c2w_np, p_world)
+                if uv is not None:
+                    u, v = uv
+                    ox = int(round(float(u))); oy = int(round(float(v)))
+                    ox = max(0, min(W_i - 1, ox))
+                    oy = max(0, min(H_i - 1, oy))
+
+            # 2) fallback origin
+            if ox is None or oy is None:
+                if origin_fallback == "pp":
+                    if K_np is None:
+                        ox, oy = W_i // 2, H_i // 2
+                    else:
+                        ox, oy = int(round(float(K_np[0, 2]))), int(round(float(K_np[1, 2])))
+                        ox = max(0, min(W_i - 1, ox))
+                        oy = max(0, min(H_i - 1, oy))
+                elif origin_fallback == "center":
+                    ox, oy = W_i // 2, H_i // 2
+                else:
+                    raise ValueError("origin_fallback must be 'pp' or 'center'")
+
+            # draw base
+            if return_overlay:
+                base_rgb = (rgb_i[:3].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
+            else:
+                base_rgb = np.zeros((H_i, W_i, 3), dtype=np.uint8)
+
+            img_bgr = cv2.cvtColor(base_rgb, cv2.COLOR_RGB2BGR)
+
+            colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]  # BGR: x=red y=green z=blue
+            origin_xy = (ox, oy)
+            cv2.circle(img_bgr, origin_xy, 3, (255, 255, 255), -1)
+            basis_np = None
+            if (K_np is not None) and (c2w_np is not None) and (eef_np is not None):
+                basis_np = _basis_from_local_projection(K_np, c2w_np, eef_np[b, :3], eps=0.02)
+            else:
+                print("Warning: cannot compute local projection basis, using global basis")
+            for i in range(3):
+                du = float(basis_np[i, 0])
+                dv = -float(basis_np[i, 1])  # image v-axis flip
+
+                end_xy = (int(round(ox + arrow_len * du)),
+                        int(round(oy + arrow_len * dv)))
+
+                draw_clipped_arrow_fixed_head(
+                    img_bgr,
+                    origin_xy,
+                    end_xy,
+                    colors[i],
+                    thickness=line_thickness,
+                    head_len_px=8,
+                    head_w_px=6,
+                )
+            out_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)  # uint8
+
+            if return_overlay:
+                rgb_u8 = (rgb_i[:3].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
+                out_rgb = (overlay_alpha * out_rgb + (1.0 - overlay_alpha) * rgb_u8).astype(np.uint8)
+
+            axis_tensor_i = torch.from_numpy(out_rgb).float().permute(2, 0, 1) / 255.0
+            axis_tensor_i = axis_tensor_i.to(device=rgb_tensor.device)
+
+            axis_list.append(axis_tensor_i)
+            origins.append((ox, oy))
+
+        axis_tensor = torch.stack(axis_list, dim=0)  # (B,3,H,W)
+
+        if input_batched:
+            return axis_tensor, origins
+        else:
+            return axis_tensor[0], origins[0]
+
