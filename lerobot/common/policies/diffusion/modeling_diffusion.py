@@ -170,6 +170,7 @@ class DiffusionPolicy(PreTrainedPolicy):
         "horizon" may not the best name to describe what the variable actually means, because this period is
         actually measured from the first observation which (if `n_obs_steps` > 1) happened in the past.
         """
+
         batch = self.normalize_inputs(batch)
         batch = self.normalize_targets(batch)
         if self.config.image_features:
@@ -178,7 +179,7 @@ class DiffusionPolicy(PreTrainedPolicy):
                 [batch[key] for key in self.config.image_features], dim=-4
             )
         # Note: It's important that this happens after stacking the images into a single key.
-
+    
         self._queues = populate_queues(self._queues, batch)
         if self.config.use_language == True:
             task = batch['task']
@@ -549,6 +550,7 @@ class DiffusionModel(nn.Module):
             "observation.environment_state": (B, environment_dim)
         }
         """
+
         batch_size, n_obs_steps = batch["observation.state"].shape[:2]
         assert n_obs_steps == self.config.n_obs_steps
 

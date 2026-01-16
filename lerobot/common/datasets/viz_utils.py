@@ -314,7 +314,7 @@ def _make_motion_basis_axis_rgb_tensor_cam_to_world(
             ox = oy = None
             if origin_robot and (c2w_np is not None) and (eef_np is not None) and (K_np is not None):
                 p_world = eef_np[b, :3]  # (3,)
-                uv = project_world_point_to_pixel_cam_to_world(K_np, c2w_np, p_worl, realworld=realworld)
+                uv = project_world_point_to_pixel_cam_to_world(K_np, c2w_np, p_world, realworld=realworld)
                 if uv is not None:
                     u, v = uv
                     ox = int(round(float(u))); oy = int(round(float(v)))
@@ -343,16 +343,13 @@ def _make_motion_basis_axis_rgb_tensor_cam_to_world(
 
             img_bgr = cv2.cvtColor(base_rgb, cv2.COLOR_RGB2BGR)
 
-            colors = [(0, 0, 255), (0, 255, 0), (255, 0, 0)]  # BGR: x=red y=green z=blue
+            colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]  # BGR: x=red y=green z=blue
             origin_xy = (ox, oy)
             cv2.circle(img_bgr, origin_xy, 3, (255, 255, 255), -1)
 
             for i in range(3):
                 du = float(basis_np[i, 0])
-                if realworld:
-                    dv = float(basis_np[i, 1]) 
-                else:
-                    dv = -float(basis_np[i, 1])  # image v-axis flip
+                dv = -float(basis_np[i, 1])  # image v-axis flip
                 end_xy = (int(round(ox + arrow_len * du)),
                         int(round(oy + arrow_len * dv)))
 

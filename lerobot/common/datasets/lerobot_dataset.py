@@ -1825,7 +1825,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         try:
             extrinsic_matrix = item['extrinsic_matrix']
             intrinsic_matrix = item['intrinsic_matrix']
-            robot_state = item['observation.state'] #gripper qpos (2), eef pos (3), eef quat (4)
+            robot_state = item['observation.state'] 
             img = item['observation.image'] # S * C * H * W
 
             if self.realworld:
@@ -1836,7 +1836,8 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                         plucker_data = self.plucker_embedder(intrinsic_tensor, extrinsic_tensor)
                         plucker_tensor = einops.rearrange(plucker_data['plucker'], 's h w c -> s c h w')
                     item['observation.image'] = torch.cat([img, plucker_tensor], dim=1)
-
+                    print("plucker shape:", plucker_tensor.shape)
+                    print("image shape:", img.shape)
                 elif self.use_dynamics_basis:
                     with torch.no_grad():
                         motion_dynamics_basis = self._get_motion_dynamics_basis(intrinsic_matrix, cam_to_world=extrinsic_matrix).reshape(-1)
@@ -1852,7 +1853,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                             return_overlay=True,
                             realworld=True,
                         ) # (B, 3, H, W)
-                    # save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
+                    save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
                     # save_rgb_image(item['observation.image'][0], "tmp_dir/robot_image.png")
                     item['observation.image'] = torch.cat([img, axis_tensor], dim=1)
             else:
