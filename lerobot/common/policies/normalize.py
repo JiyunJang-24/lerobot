@@ -186,7 +186,7 @@ class Normalize(nn.Module):
                 assert not torch.isinf(min).any(), _no_stats_error_str("min")
                 assert not torch.isinf(max).any(), _no_stats_error_str("max")
                 # normalize to [0,1]
-                import pdb; pdb.set_trace()
+
                 axis = -mean.ndim
                 if mean.shape[axis] != batch[key].shape[axis]:
                     C = min.shape[0]

@@ -1862,6 +1862,8 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                             return_overlay=True,
                             realworld=True,
                         ) # (B, 3, H, W)
+                        # save_rgb_image(item['observation.image'][0], "tmp_dir/robot_image.png")
+                        item['observation.image'] = torch.cat([img, axis_tensor], dim=1)
                         try:
                             wrist_img = item['observation.wrist_image']
                             wrist_intrinsic_matrix = item['wrist_intrinsic_matrix']
@@ -1903,8 +1905,6 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                         except:
                             print("No wrist camera info")
                             pass
-                    # save_rgb_image(item['observation.image'][0], "tmp_dir/robot_image.png")
-                    item['observation.image'] = torch.cat([img, axis_tensor], dim=1)
             else:
                 if self.use_plucker:
                     with torch.no_grad():

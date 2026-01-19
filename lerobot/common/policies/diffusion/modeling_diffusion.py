@@ -370,6 +370,7 @@ class DiffusionModel(nn.Module):
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode image features and concatenate them all together along with the state vector."""
         batch_size, n_obs_steps = batch[OBS_ROBOT].shape[:2]
+
         global_cond_feats = []
         if self.config.use_language:
             task = batch['task'] # list, len(batch['task']) = batch_size
