@@ -10,8 +10,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 REPO_ROOT="${SCRIPT_DIR}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH}"
 
-CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
-  --dataset.repo_id=[cam_info_10_10_0.0_0.0/v-1.000-1.000_num1] \
+CUDA_VISIBLE_DEVICES=3 python lerobot/scripts/train.py \
+  --dataset.repo_id=[DP_wrist_cam_info_10_10_0.0_0.0/v-1.000-1.000_num1] \
   --dataset.root=/data1/local/shortcut-learning-in-grps/dataset_git/libero_spatial_no_noops_island_1_lerobot \
   --dataset.image_transforms.enable=false \
   --dataset.use_imagenet_stats=false \
@@ -26,11 +26,14 @@ CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
   --policy.use_dynamic_feature=false \
   --policy.use_normalize_for_action=true \
   --policy.image_channel=6 \
+  --policy.use_separate_rgb_encoder_per_camera=true \
+  --policy.use_wrist_image=true \
   --steps=90000 \
-  --save_freq=5 \
+  --save_freq=1000 \
   --batch_size=4 \
   --wandb.enable=false \
   --num_workers=0 \
   --use_plucker=false \
-  --use_dynamics_basis=true
+  --use_dynamics_basis=true \
+  --apply_basis_scale=false
 # Training checkpoints will be saved under: lerobot/outputs/train/202x-xx-xx/xx-xx-xx_diffusion

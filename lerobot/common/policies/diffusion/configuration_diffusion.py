@@ -167,7 +167,7 @@ class DiffusionConfig(PreTrainedConfig):
     
     # xyg added
     use_robot_state: bool = True
-
+    use_wrist_image: bool = False
     def __post_init__(self):
         super().__post_init__()
 

@@ -107,3 +107,9 @@ def remove_extrinsic_camera_axis_correction(extrinsic_mtx: Tensor)->Tensor:
 	removed_extrinsic_mtx = extrinsic_mtx @ camera_axis_correction
 
 	return removed_extrinsic_mtx
+
+def intrinsic_image_size_calibration(intrinsic_mtx: Tensor, cur_width: float = 224, data_width: float = 256)->Tensor:
+    calib_ratio = cur_width / data_width
+    calibrated = intrinsic_mtx * calib_ratio
+    calibrated[2, 2] = 1.0
+    return calibrated

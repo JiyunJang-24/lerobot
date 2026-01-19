@@ -27,6 +27,7 @@ import PIL.Image
 import torch
 import torch.utils
 import einops
+from scipy.spatial.transform import Rotation as R
 from datasets import concatenate_datasets, load_dataset
 from huggingface_hub import HfApi, snapshot_download
 from huggingface_hub.constants import REPOCARD_NAME
@@ -78,6 +79,12 @@ from lerobot.common.datasets.video_utils import (
 from lerobot.common.datasets.camera_utils import (
     PluckerEmbedder,
     remove_extrinsic_camera_axis_correction
+)
+from lerobot.common.datasets.viz_utils import (
+    _rescale_make_motion_basis_axis_rgb_tensor_cam_to_world,
+    _make_motion_basis_wrist_axis_rgb_tensor_cam_to_world,
+    _make_motion_basis_axis_rgb_tensor_cam_to_world,
+    _get_motion_dynamics_basis
 )
 from lerobot.common.robot_devices.robots.utils import Robot
 from lerobot.common.datasets.viz_utils import (
@@ -1217,6 +1224,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         use_plucker: bool = False,
         use_dynamics_basis: bool = False,
         realworld: bool = False,
+        apply_basis_scale: bool = False,
     ):
         super().__init__()
         self.repo_ids = repo_ids
@@ -1310,7 +1318,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             self.plucker_embedder = PluckerEmbedder(img_size=self.image_size, device='cpu')
         else:
             self.plucker_embedder = None
-
+        self.apply_basis_scale = apply_basis_scale
     def augment_action_sequence(
         self,
         action: torch.Tensor,          # (T, 7)
@@ -1591,10 +1599,11 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         self.pad_specs = pad_specs
         self.disabled_features.update(mismatched_disable)
 
-    def _get_motion_dynamics_basis(self, intrinsic_matrix, cam_to_world: np.ndarray):
+    
+    def _get_motion_dynamics_basis(self, intrinsic_matrix, cam_to_world):
         """
-        cam_to_world: (4,4) camera pose matrix from pose_set (agentview).
-                    This is T_{w<-c} (world_from_camera).
+        intrinsic_matrix: (3,3) or (B,3,3)
+        cam_to_world: (4,4) or (B,4,4), T_{w<-c} (world_from_camera)
 
         Returns:
             torch.Tensor (3,2) on CUDA:
@@ -1853,7 +1862,47 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                             return_overlay=True,
                             realworld=True,
                         ) # (B, 3, H, W)
-                    save_rgb_image(axis_tensor[0], "tmp_dir/axis_tensor.png")
+                        try:
+                            wrist_img = item['observation.wrist_image']
+                            wrist_intrinsic_matrix = item['wrist_intrinsic_matrix']
+                            T_tcp_cam = item['wrist_extrinsic_matrix']
+                            tip_pose = item['observation.state'] # curr_pos
+                            tcp_pose = item['observation.tcp_pose'] # curr_tcp_pose
+                            
+                            B = wrist_img.shape[0]
+                            wrist_out = []
+                            for b in range(B):
+                                tcp_pose_rv = tcp_pose_euler_to_rv(tcp_pose[b])
+                                if not hasattr(self, "_prev_rpy"):
+                                    self._prev_rpy = None
+
+                                tcp_pose_rv, curr_rpy = tcp_pose_euler_to_rv(tcp_pose[b], prev_rpy=self._prev_rpy)
+                                self._prev_rpy = curr_rpy
+
+                                T_b_tcp = pose6d_to_T(tcp_pose_rv)
+                                T_b_tcp = torch.from_numpy(T_b_tcp).to(T_tcp_cam.device).type_as(T_tcp_cam)
+                                T_b_cam = T_b_tcp @ T_tcp_cam
+                                wrist_extrinsic_matrix = T_b_cam
+                                wrist_motion_dynamics_basis = _get_motion_dynamics_basis(wrist_intrinsic_matrix, cam_to_world=wrist_extrinsic_matrix).reshape(-1)
+                                wrist_axis_tensor, wrist_origin_xy = _make_motion_basis_axis_rgb_tensor_cam_to_world(
+                                    rgb_tensor=wrist_img[b:b+1],               # (B, 3,H,W)
+                                    motion_dynamics_basis=wrist_motion_dynamics_basis,
+                                    cam_to_world=wrist_extrinsic_matrix,                  # cam_pose = cam_to_world (고정)
+                                    intrinsic_matrix=wrist_intrinsic_matrix,
+                                    robot_eef_abs_poses=tip_pose[b, :7],  # eef pose (B, 7)
+                                    origin_robot=False,
+                                    origin_fallback="pp",
+                                    arrow_len=60,
+                                    return_overlay=True,
+                                    realworld=True,
+                                    wrist=True,
+                                ) # (B, 3, H, W)
+                                wrist_out.append(torch.cat([wrist_img[b:b+1], wrist_axis_tensor], dim=1))
+                                save_rgb_image(wrist_axis_tensor[0], "tmp_dir/wrist_axis_tensor.png")
+                            item['observation.wrist_image'] = torch.cat(wrist_out, dim=0)
+                        except:
+                            print("No wrist camera info")
+                            pass
                     # save_rgb_image(item['observation.image'][0], "tmp_dir/robot_image.png")
                     item['observation.image'] = torch.cat([img, axis_tensor], dim=1)
             else:
@@ -1963,3 +2012,128 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             f"  Transformations: {self.image_transforms},\n"
             f")"
         )
+
+def T_inv(T):
+    Rm = T[:3,:3]
+    t = T[:3, 3]
+    Ti = np.eye(4)
+    Ti[:3,:3] = Rm.T
+    Ti[:3, 3] = -Rm.T @ t
+    return Ti
+
+def make_T_tcp_tip(gripper_length=0.23):
+    T = np.eye(4)
+    T[:3, 3] = np.array([0.0, 0.0, gripper_length])  # TCP 로컬 z축
+    return T
+
+def pose6d_to_T(pose6):
+        """
+        pose6: [x,y,z, rx,ry,rz]
+        rvec: Rodrigues axis-angle (rad)
+        """
+        pose6 = np.asarray(pose6, dtype=np.float64).reshape(6,)
+        t = pose6[:3]
+        rvec = pose6[3:]
+        R, _ = cv2.Rodrigues(rvec)
+
+        T = np.eye(4, dtype=np.float64)
+        T[:3,:3] = R
+        T[:3, 3] = t
+        return T
+
+def pose_posrotvec_to_T(pose_6d: torch.Tensor) -> torch.Tensor:
+    """
+    pose_6d: (..., 6) torch tensor, [x,y,z, rx,ry,rz] (rotvec)
+    return: (..., 4, 4) torch tensor
+    """
+    assert pose_6d.shape[-1] == 6, f"Expected last dim 6, got {pose_6d.shape}"
+
+    device = pose_6d.device
+    dtype = pose_6d.dtype
+
+    # flatten batch dims
+    flat = pose_6d.reshape(-1, 6)
+    t = flat[:, :3].detach().cpu().numpy()
+    rv = flat[:, 3:6].detach().cpu().numpy()
+
+    Rm = R.from_rotvec(rv).as_matrix()  # (N,3,3)
+
+    T = np.tile(np.eye(4)[None, ...], (flat.shape[0], 1, 1))
+    T[:, :3, :3] = Rm
+    T[:, :3, 3] = t
+
+    T = torch.from_numpy(T).to(device=device, dtype=dtype)
+    return T.reshape(*pose_6d.shape[:-1], 4, 4)
+
+def tcp_pose_euler_to_rv(tcp_pose, prev_rpy=None):
+    """
+    tcp_pose: [x,y,z, roll,pitch,yaw] (rad)
+    prev_rpy: 이전 프레임의 [roll,pitch,yaw] (rad) or None
+    """
+    arr = np.asarray(tcp_pose, dtype=np.float64)
+    x, y, z, roll, pitch, yaw = arr
+
+    rpy = np.array([roll, pitch, yaw], dtype=np.float64)
+    if prev_rpy is not None:
+        rpy = unwrap_rpy(rpy, prev_rpy)
+
+    rv = euler_2_rv(rpy[0], rpy[1], rpy[2])
+    return np.concatenate([[x, y, z], rv]), rpy
+
+
+def euler_2_rv(roll, pitch, yaw, eps=1e-8):
+    """
+    roll, pitch, yaw: radian
+    return: rotation vector (3,)
+    """
+
+    # Rotation matrices
+    Rx = np.array([
+        [1, 0, 0],
+        [0, np.cos(roll), -np.sin(roll)],
+        [0, np.sin(roll),  np.cos(roll)],
+    ])
+
+    Ry = np.array([
+        [ np.cos(pitch), 0, np.sin(pitch)],
+        [0, 1, 0],
+        [-np.sin(pitch), 0, np.cos(pitch)],
+    ])
+
+    Rz = np.array([
+        [np.cos(yaw), -np.sin(yaw), 0],
+        [np.sin(yaw),  np.cos(yaw), 0],
+        [0, 0, 1],
+    ])
+
+    R = Rz @ Ry @ Rx
+
+    # rotation matrix -> rotation vector
+    trace = np.trace(R)
+    cos_theta = (trace - 1.0) / 2.0
+    cos_theta = np.clip(cos_theta, -1.0, 1.0)
+    theta = np.arccos(cos_theta)
+
+    if theta < eps:
+        return np.zeros(3)
+
+    rx = (R[2, 1] - R[1, 2]) / (2 * np.sin(theta))
+    ry = (R[0, 2] - R[2, 0]) / (2 * np.sin(theta))
+    rz = (R[1, 0] - R[0, 1]) / (2 * np.sin(theta))
+
+    return theta * np.array([rx, ry, rz])
+
+def unwrap_angle(curr, prev):
+    """prev 기준으로 curr를 2π 주기에서 가장 가까운 값으로 이동"""
+    delta = curr - prev
+    delta = (delta + np.pi) % (2.0 * np.pi) - np.pi
+    return prev + delta
+
+def unwrap_rpy(curr_rpy, prev_rpy):
+    curr_rpy = np.asarray(curr_rpy, dtype=np.float64)
+    prev_rpy = np.asarray(prev_rpy, dtype=np.float64)
+    return np.array([
+        unwrap_angle(curr_rpy[0], prev_rpy[0]),
+        unwrap_angle(curr_rpy[1], prev_rpy[1]),
+        unwrap_angle(curr_rpy[2], prev_rpy[2]),
+    ], dtype=np.float64)
